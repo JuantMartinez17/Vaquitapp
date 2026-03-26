@@ -8,7 +8,7 @@
     "test": "jest",
     "build": "webpack --config webpack.config.js",
     "lint": "eslint .",
-    "dev": "nodemon index.js"
+    "dev": "nodemon server.js"
   },
   "keywords": [],
   "author": "",
