@@ -1,6 +1,5 @@
 const pool = require('../config/db_connection');
 
-
 // GET
 const getAllUsers = async () => {
    const res = await pool.query("SELECT id, username, email FROM users");
