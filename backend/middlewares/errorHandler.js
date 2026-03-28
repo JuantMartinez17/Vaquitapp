@@ -6,6 +6,10 @@ module.exports = (err, req, res, next) => {
     if(err.code === '23505') { // Unique violation error code
         return res.status(400).json({ error: 'Duplicate entry. The value already exists.' });
     }
+
+    if (err.message?.includes('splits excede')) {
+    return res.status(400).json({ error: err.message });
+   }
     
     res.status(500).json({error: 'Internal Server Error' });
 }
