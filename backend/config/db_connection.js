@@ -1,7 +1,7 @@
-const { pool } = require('pg');
+const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new pool({
+const pool = new Pool({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
   database: process.env.DB_NAME,
@@ -9,13 +9,18 @@ const pool = new pool({
   port: process.env.DB_PORT,
 });
 
-try {
+const testConnection = async () => {
+  try {
   await pool.connect();
   console.log("Connected to database successfully");
-}catch (err) {
-  console.error("Error connecting to database: ", err);
-} finally {
-  await pool.end();
+  }catch (err) {
+    console.error("Error connecting to database: ", err);
+    await pool.end();
+    process.exit(1);
+  }
 }
+
+testConnection();
+
 
 module.exports = pool;
