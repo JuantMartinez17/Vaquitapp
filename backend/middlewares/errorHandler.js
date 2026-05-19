@@ -3,7 +3,7 @@
 module.exports = (err, req, res, next) => {
     console.error("Error: ", err);
 
-    if(err.code === '23505') { // Unique violation error code
+    if(err.code === '23505') {
         return res.status(400).json({ error: 'Duplicate entry. The value already exists.' });
     }
 
