@@ -1,13 +1,388 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Vaquitapp - Prisma Schema
+// Documentación: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum ExpenseStatus {
+  active
+  deleted
+  pending
+}
+
+enum SplitType {
+  equal
+  percentage
+  fixed
+  shares
+}
+
+enum MemberRole {
+  admin
+  member
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  rejected
+  expired
+}
+
+enum RecurrenceFrequency {
+  monthly
+  weekly
+  yearly
+  daily
+}
+
+enum SettlementStatus {
+  pending
+  confirmed
+  cancelled
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id                     String    @id @default(uuid()) @db.Uuid
+  username               String    @unique @db.VarChar(50)
+  email                  String    @unique @db.VarChar(255)
+  passwordHash           String    @map("password_hash") @db.VarChar(255)
+  displayName            String?   @map("display_name") @db.VarChar(100)
+  avatarUrl              String?   @map("avatar_url")
+  preferredCurrencyCode  String    @default("ARS") @map("preferred_currency_code") @db.VarChar(3)
+  emailVerified          Boolean   @default(false) @map("email_verified")
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz
+
+  // Relaciones
+  createdGroups          Group[]                @relation("GroupCreator")
+  memberships            GroupMember[]
+  refreshTokens          RefreshToken[]
+  expensesPaid           Expense[]              @relation("ExpensePayer")
+  expensesCreated        Expense[]              @relation("ExpenseCreator")
+  expenseSplits          ExpenseSplit[]
+  recurringExpensesPaid  RecurringExpense[]     @relation("RecurringPayer")
+  recurringCreated       RecurringExpense[]     @relation("RecurringCreator")
+  recurringSplits        RecurringExpenseSplit[]
+  settlementsFrom        Settlement[]           @relation("SettlementFrom")
+  settlementsTo          Settlement[]           @relation("SettlementTo")
+  settlementsCreated     Settlement[]           @relation("SettlementCreator")
+  invitationsSent        Invitation[]           @relation("InvitationInviter")
+  invitationsReceived    Invitation[]           @relation("InvitationInvitee")
+  uploadedAttachments    ExpenseAttachment[]
+  preferredCurrency      Currency               @relation(fields: [preferredCurrencyCode], references: [code])
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  userAgent String?   @map("user_agent")
+  ipAddress String?   @map("ip_address") @db.Inet
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// GROUPS
+// ============================================================
+
+model Group {
+  id                    String    @id @default(uuid()) @db.Uuid
+  name                  String    @db.VarChar(100)
+  description           String?
+  defaultCurrencyCode   String    @default("ARS") @map("default_currency_code") @db.VarChar(3)
+  createdBy             String    @map("created_by") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamptz
+
+  creator           User                @relation("GroupCreator", fields: [createdBy], references: [id])
+  defaultCurrency   Currency            @relation(fields: [defaultCurrencyCode], references: [code])
+  members           GroupMember[]
+  invitations       Invitation[]
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
+  settlements       Settlement[]
+  categories        Category[]
+
+  @@index([createdBy])
+  @@map("groups")
+}
+
+model GroupMember {
+  id       String      @id @default(uuid()) @db.Uuid
+  groupId  String      @map("group_id") @db.Uuid
+  userId   String      @map("user_id") @db.Uuid
+  role     MemberRole  @default(member)
+  joinedAt DateTime    @default(now()) @map("joined_at") @db.Timestamptz
+  leftAt   DateTime?   @map("left_at") @db.Timestamptz
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model Invitation {
+  id             String           @id @default(uuid()) @db.Uuid
+  groupId        String           @map("group_id") @db.Uuid
+  invitedBy      String           @map("invited_by") @db.Uuid
+  invitedEmail   String           @map("invited_email") @db.VarChar(255)
+  invitedUserId  String?          @map("invited_user_id") @db.Uuid
+  token          String           @unique @db.VarChar(128)
+  status         InvitationStatus @default(pending)
+  expiresAt      DateTime         @map("expires_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  respondedAt    DateTime?        @map("responded_at") @db.Timestamptz
+
+  group       Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inviter     User   @relation("InvitationInviter", fields: [invitedBy], references: [id])
+  invitedUser User?  @relation("InvitationInvitee", fields: [invitedUserId], references: [id])
+
+  @@index([groupId])
+  @@index([invitedEmail])
+  @@map("invitations")
+}
+
+// ============================================================
+// CURRENCIES
+// ============================================================
+
+model Currency {
+  code          String @id @db.VarChar(3)
+  name          String @db.VarChar(50)
+  symbol        String @db.VarChar(5)
+  decimalPlaces Int    @default(2) @map("decimal_places") @db.SmallInt
+
+  usersPreferring      User[]
+  groupsDefaulting     Group[]
+  expenses             Expense[]
+  recurringExpenses    RecurringExpense[]
+  settlements          Settlement[]
+  ratesFrom            ExchangeRate[] @relation("RateFrom")
+  ratesTo              ExchangeRate[] @relation("RateTo")
+
+  @@map("currencies")
+}
+
+model ExchangeRate {
+  id           String   @id @default(uuid()) @db.Uuid
+  fromCurrency String   @map("from_currency") @db.VarChar(3)
+  toCurrency   String   @map("to_currency") @db.VarChar(3)
+  rate         Decimal  @db.Decimal(18, 8)
+  rateDate     DateTime @map("rate_date") @db.Date
+  source       String?  @db.VarChar(50)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  from Currency @relation("RateFrom", fields: [fromCurrency], references: [code])
+  to   Currency @relation("RateTo", fields: [toCurrency], references: [code])
+
+  @@unique([fromCurrency, toCurrency, rateDate, source])
+  @@index([fromCurrency, toCurrency, rateDate(sort: Desc)])
+  @@map("exchange_rates")
+}
+
+// ============================================================
+// CATEGORIES
+// ============================================================
+
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  groupId   String?   @map("group_id") @db.Uuid
+  name      String    @db.VarChar(50)
+  icon      String?   @db.VarChar(50)
+  color     String?   @db.VarChar(7)
+  isSystem  Boolean   @default(false) @map("is_system")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  group             Group?             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
+
+  @@index([groupId])
+  @@map("categories")
+}
+
+// ============================================================
+// EXPENSES
+// ============================================================
+
+model Expense {
+  id                  String        @id @default(uuid()) @db.Uuid
+  groupId             String        @map("group_id") @db.Uuid
+  categoryId          String?       @map("category_id") @db.Uuid
+  paidBy              String        @map("paid_by") @db.Uuid
+  recurringExpenseId  String?       @map("recurring_expense_id") @db.Uuid
+  description         String        @db.VarChar(255)
+  notes               String?
+  amount              Decimal       @db.Decimal(14, 2)
+  currencyCode        String        @map("currency_code") @db.VarChar(3)
+  splitType           SplitType     @default(equal) @map("split_type")
+  expenseDate         DateTime      @default(now()) @map("expense_date") @db.Date
+  status              ExpenseStatus @default(active)
+  createdBy           String        @map("created_by") @db.Uuid
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt           DateTime?     @map("deleted_at") @db.Timestamptz
+
+  group             Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  category          Category?          @relation(fields: [categoryId], references: [id])
+  payer             User               @relation("ExpensePayer", fields: [paidBy], references: [id])
+  creator           User               @relation("ExpenseCreator", fields: [createdBy], references: [id])
+  currency          Currency           @relation(fields: [currencyCode], references: [code])
+  recurringExpense  RecurringExpense?  @relation(fields: [recurringExpenseId], references: [id])
+  splits            ExpenseSplit[]
+  attachments       ExpenseAttachment[]
+
+  @@index([groupId, expenseDate(sort: Desc)])
+  @@index([categoryId])
+  @@index([paidBy])
+  @@map("expenses")
+}
+
+model ExpenseSplit {
+  id         String   @id @default(uuid()) @db.Uuid
+  expenseId  String   @map("expense_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  amount     Decimal  @db.Decimal(14, 2)
+  percentage Decimal? @db.Decimal(5, 2)
+  shares     Int?
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+  @@map("expense_splits")
+}
+
+// ============================================================
+// RECURRING EXPENSES
+// ============================================================
+
+model RecurringExpense {
+  id                  String              @id @default(uuid()) @db.Uuid
+  groupId             String              @map("group_id") @db.Uuid
+  categoryId          String?             @map("category_id") @db.Uuid
+  paidBy              String              @map("paid_by") @db.Uuid
+  description         String              @db.VarChar(255)
+  defaultAmount       Decimal             @map("default_amount") @db.Decimal(14, 2)
+  currencyCode        String              @map("currency_code") @db.VarChar(3)
+  splitType           SplitType           @default(equal) @map("split_type")
+  frequency           RecurrenceFrequency @default(monthly)
+  dayOfMonth          Int?                @map("day_of_month") @db.SmallInt
+  startDate           DateTime            @map("start_date") @db.Date
+  endDate             DateTime?           @map("end_date") @db.Date
+  isActive            Boolean             @default(true) @map("is_active")
+  nextRunDate         DateTime            @map("next_run_date") @db.Date
+  lastGeneratedDate   DateTime?           @map("last_generated_date") @db.Date
+  createdBy           String              @map("created_by") @db.Uuid
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt           DateTime?           @map("deleted_at") @db.Timestamptz
+
+  group           Group                    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  category        Category?                @relation(fields: [categoryId], references: [id])
+  payer           User                     @relation("RecurringPayer", fields: [paidBy], references: [id])
+  creator         User                     @relation("RecurringCreator", fields: [createdBy], references: [id])
+  currency        Currency                 @relation(fields: [currencyCode], references: [code])
+  splits          RecurringExpenseSplit[]
+  generatedExpenses Expense[]
+
+  @@index([nextRunDate])
+  @@map("recurring_expenses")
+}
+
+model RecurringExpenseSplit {
+  id                  String   @id @default(uuid()) @db.Uuid
+  recurringExpenseId  String   @map("recurring_expense_id") @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  amount              Decimal? @db.Decimal(14, 2)
+  percentage          Decimal? @db.Decimal(5, 2)
+  shares              Int?
+
+  recurringExpense RecurringExpense @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id])
+
+  @@unique([recurringExpenseId, userId])
+  @@map("recurring_expense_splits")
+}
+
+// ============================================================
+// ATTACHMENTS
+// ============================================================
+
+model ExpenseAttachment {
+  id               String    @id @default(uuid()) @db.Uuid
+  expenseId        String    @map("expense_id") @db.Uuid
+  storageKey       String    @map("storage_key")
+  storageProvider  String    @default("s3") @map("storage_provider") @db.VarChar(20)
+  bucket           String    @db.VarChar(100)
+  originalFilename String    @map("original_filename") @db.VarChar(255)
+  mimeType         String    @map("mime_type") @db.VarChar(100)
+  sizeBytes        BigInt    @map("size_bytes")
+  sha256Hash       String?   @map("sha256_hash") @db.VarChar(64)
+  uploadedBy       String    @map("uploaded_by") @db.Uuid
+  uploadedAt       DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz
+
+  expense  Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  uploader User    @relation(fields: [uploadedBy], references: [id])
+
+  @@index([expenseId])
+  @@map("expense_attachments")
+}
+
+// ============================================================
+// SETTLEMENTS
+// ============================================================
+
+model Settlement {
+  id              String           @id @default(uuid()) @db.Uuid
+  groupId         String           @map("group_id") @db.Uuid
+  fromUser        String           @map("from_user") @db.Uuid
+  toUser          String           @map("to_user") @db.Uuid
+  amount          Decimal          @db.Decimal(14, 2)
+  currencyCode    String           @map("currency_code") @db.VarChar(3)
+  settlementDate  DateTime         @default(now()) @map("settlement_date") @db.Date
+  notes           String?
+  status          SettlementStatus @default(confirmed)
+  createdBy       String           @map("created_by") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  deletedAt       DateTime?        @map("deleted_at") @db.Timestamptz
+
+  group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  from     User     @relation("SettlementFrom", fields: [fromUser], references: [id])
+  to       User     @relation("SettlementTo", fields: [toUser], references: [id])
+  creator  User     @relation("SettlementCreator", fields: [createdBy], references: [id])
+  currency Currency @relation(fields: [currencyCode], references: [code])
+
+  @@index([groupId, settlementDate(sort: Desc)])
+  @@map("settlements")
 }
