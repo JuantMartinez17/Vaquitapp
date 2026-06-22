@@ -2,6 +2,8 @@
 node_modules/
 # build
 dist/
+# test coverage
+coverage/
 # env (commiteamos solo el ejemplo)
 .env
 .env.*
@@ -11,5 +13,7 @@ dist/
 # logs / misc
 *.log
 .DS_Store
+# estado local de herramientas (Claude Code, etc.)
+.claude/
 # notas de desarrollo (dejalo si lo querés privado)
 vaquitapp-apuntes-setup.md

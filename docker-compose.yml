@@ -4,11 +4,13 @@ services:
     container_name: vaquitapp-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: vaquitapp
-      POSTGRES_PASSWORD: vaquitapp_dev
-      POSTGRES_DB: vaquitapp
+      # Las credenciales salen de tu .env (docker-compose lo lee solo).
+      # USER y DB no son secretos; la contraseña es obligatoria (sin default).
+      POSTGRES_USER: ${POSTGRES_USER:-vaquitapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defini POSTGRES_PASSWORD en tu .env}
+      POSTGRES_DB: ${POSTGRES_DB:-vaquitapp}
     ports:
-      - "5432:5432"
+      - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
