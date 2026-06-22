@@ -1,5 +1,15 @@
-node_modules
+# deps
+node_modules/
+# build
+dist/
+# env (commiteamos solo el ejemplo)
 .env
-backend/node_modules
-backend/.env
+.env.*
+!.env.example
+# cliente generado por Prisma
+/src/generated/prisma/
+# logs / misc
+*.log
+.DS_Store
+# notas de desarrollo (dejalo si lo querés privado)
 vaquitapp-apuntes-setup.md
