@@ -6,6 +6,9 @@ import { pinoHttp } from 'pino-http';
 import { env } from './config/env.js';
 import { prisma } from './config/prisma.js';
 import { errorMiddleware } from './middlewares/error.middleware.js';
+import { authRouter } from './modules/auth/auth.routes.js';
+import { usersRouter } from './modules/users/users.routes.js';
+import { currenciesRouter } from './modules/currencies/currencies.routes.js';
 
 export const app = express();
 
@@ -41,18 +44,11 @@ app.get('/health/ready', async (_req, res) => {
   }
 });
 
-// Rutas de la API (los módulos se van montando acá a medida que se crean)
+// Rutas de la API v1
 const apiRouter = express.Router();
-
-// Endpoint temporal de prueba (lo borrás cuando ya no lo necesites)
-apiRouter.get('/currencies', async (_req, res) => {
-  const currencies = await prisma.currency.findMany({ orderBy: { code: 'asc' } });
-  res.json(currencies);
-});
-
-// Acá vamos a montar los módulos. Por ejemplo, cuando exista auth:
-// import { authRouter } from './modules/auth/auth.routes.js';
-// apiRouter.use('/auth', authRouter);
+apiRouter.use('/auth', authRouter);
+apiRouter.use('/users', usersRouter);
+apiRouter.use('/currencies', currenciesRouter);
 
 app.use('/api/v1', apiRouter);
 

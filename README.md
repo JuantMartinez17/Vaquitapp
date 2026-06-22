@@ -90,6 +90,25 @@ prisma/                    # schema, migraciones y seed
 - **Paginación**: cursor-based con [`pagination.ts`](src/utils/pagination.ts).
 - **Auth**: bearer token (`Authorization: Bearer <access>`); refresh con rotación.
 
+### Endpoints (v1)
+
+Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessToken>`.
+
+| Método | Ruta               | Descripción                                                        |
+| ------ | ------------------ | ------------------------------------------------------------------ |
+| POST   | `/auth/register`   | Crea usuario y devuelve `{ user, accessToken, refreshToken }`      |
+| POST   | `/auth/login`      | Login con email + password                                         |
+| POST   | `/auth/refresh`    | Rota el refresh token y devuelve un nuevo par                      |
+| POST   | `/auth/logout`     | Revoca el refresh token recibido                                   |
+| POST   | `/auth/logout-all` | 🔒 Revoca todas las sesiones del usuario                           |
+| GET    | `/users/me`        | 🔒 Perfil del usuario autenticado                                  |
+| PATCH  | `/users/me`        | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode` |
+| GET    | `/currencies`      | Catálogo de monedas soportadas                                     |
+
+**Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del
+que solo se guarda su hash; en cada `/auth/refresh` se rota y, si se reutiliza uno ya revocado,
+se revocan todas las sesiones (defensa ante robo de token).
+
 ## Tests
 
 Usamos el **runner nativo de Node** (`node:test`) ejecutado con `tsx`. No depende de
