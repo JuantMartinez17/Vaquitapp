@@ -1,0 +1,11 @@
+# Normaliza los fines de línea a LF en el repo (lo que esperan Linux/CI/Render
+# y lo que genera Prettier). Evita el ruido de CRLF↔LF en Windows.
+* text=auto eol=lf
+
+# Binarios: que git no toque sus fines de línea.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

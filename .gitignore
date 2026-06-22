@@ -13,5 +13,7 @@ coverage/
 # logs / misc
 *.log
 .DS_Store
+# estado local de herramientas (Claude Code, etc.)
+.claude/
 # notas de desarrollo (dejalo si lo querés privado)
 vaquitapp-apuntes-setup.md

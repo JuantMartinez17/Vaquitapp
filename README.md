@@ -27,7 +27,7 @@ gastos recurrentes, adjuntos y multi-moneda.
 npm install
 
 # 2. Variables de entorno
-cp .env.example .env        # y completá los valores (sobre todo los JWT_*)
+cp .env.example .env        # completá POSTGRES_PASSWORD, los JWT_*, y que DATABASE_URL use esa misma clave
 
 # 3. Levantar PostgreSQL
 docker compose up -d postgres
