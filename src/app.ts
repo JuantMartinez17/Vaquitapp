@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import pinoHttp from 'pino-http';
+import { pinoHttp } from 'pino-http';
 import { env } from './config/env.js';
 import { prisma } from './config/prisma.js';
 import { errorMiddleware } from './middlewares/error.middleware.js';
@@ -12,7 +13,19 @@ export const app = express();
 app.use(helmet());
 app.use(cors({ origin: env.CORS_ORIGINS.split(',') }));
 app.use(express.json({ limit: '1mb' }));
-app.use(pinoHttp({ level: env.LOG_LEVEL }));
+app.use(
+  pinoHttp({
+    level: env.LOG_LEVEL,
+    // Request ID: reutiliza el X-Request-Id entrante o genera uno, y lo
+    // devuelve en la respuesta para poder correlacionar logs y reportes.
+    genReqId: (req, res) => {
+      const incoming = req.headers['x-request-id'];
+      const id = (Array.isArray(incoming) ? incoming[0] : incoming) ?? randomUUID();
+      res.setHeader('X-Request-Id', id);
+      return id;
+    },
+  }),
+);
 
 // Health checks
 app.get('/health', (_req, res) => {
