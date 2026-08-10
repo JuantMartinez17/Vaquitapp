@@ -242,6 +242,9 @@ Render, nunca en el repo.
 - **Health Check Path**: `/health/ready`.
 - **Auto-Deploy**: `dev`/`staging` despliegan solo tras CI en verde ("After CI Checks Pass");
   `prod` nunca despliega automáticamente, se dispara a mano desde el dashboard.
+- **Backups**: gestionados por Render en producción, retención 7 días. Procedimiento de
+  restauración y verificación, ejercitado localmente, en
+  [`docs/runbooks/restore-drill.md`](docs/runbooks/restore-drill.md) (D18).
 - **Almacenamiento**: `dev` usa `STORAGE_PROVIDER=local`; `staging`/`prod` usan `s3` — el
   filesystem de Render es efímero, así que local perdería los adjuntos en cada deploy.
 
