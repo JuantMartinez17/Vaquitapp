@@ -223,6 +223,10 @@ Modelo por entorno:
 - `main`/`staging`/`develop` protegidas: PR obligatorio + CI en verde.
 - Mensajes de commit en formato **Conventional Commits** (`feat:`, `fix:`, `chore:`…).
 
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) corre en cada push/PR a esas tres
+ramas: `install → format:check → lint → typecheck → migrate deploy → test → build`, contra un
+Postgres desechable (servicio de GitHub Actions).
+
 ## Deploy (Render)
 
 Un Web Service por entorno (`dev`←develop, `staging`←staging, `prod`←main):
