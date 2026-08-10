@@ -176,6 +176,11 @@ Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessT
 | GET    | `/households/:id/expenses/:id/attachments`    | 🔒 Lista adjuntos                                                              |
 | GET    | `/.../attachments/:attId/download`            | 🔒 URL prefirmada de descarga (5 min)                                          |
 | DELETE | `/.../attachments/:attId`                     | 🔒 Elimina un adjunto                                                          |
+| GET    | `/households/:id/analytics/summary`           | 🔒 Total gastado, total ingresado, neto (`?from=&to=` obligatorio)             |
+| GET    | `/households/:id/analytics/by-category`       | 🔒 Gasto por categoría en el rango                                             |
+| GET    | `/households/:id/analytics/by-member`         | 🔒 Gasto por miembro (por su parte del split) en el rango                      |
+| GET    | `/households/:id/analytics/over-time`         | 🔒 Serie temporal (`?granularity=day\|week\|month`)                            |
+| GET    | `/households/:id/analytics/comparison`        | 🔒 Rango actual vs. el período anterior de igual duración                      |
 | GET    | `/currencies`                                 | Catálogo de monedas soportadas                                                 |
 
 **Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del
