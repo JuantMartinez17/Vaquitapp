@@ -1,8 +1,8 @@
 import { randomBytes, createHash } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import type { SignOptions } from 'jsonwebtoken';
-import { env } from '../../config/env.js';
-import { parseDurationMs } from '../../utils/duration.js';
+import { env } from '../../app/config.js';
+import { parseDurationMs } from '../../shared/utils/duration.js';
 
 export interface AccessTokenPayload {
   sub: string; // userId

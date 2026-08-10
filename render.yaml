@@ -1,0 +1,149 @@
+# Render Blueprint — one Web Service + managed Postgres per environment,
+# matching README.md § Flujo de ramas y entornos / § Deploy (Render).
+#
+# Review before applying: plan tiers are the cheapest paid tier ("starter");
+# region and any real S3 bucket/credentials are yours to fill in. Blueprints
+# only apply on first sync — editing this file afterwards does not change
+# already-created services, only what a fresh `render blueprint launch` would.
+#
+# Secrets left unset here (`sync: false`) must be entered once in the Render
+# dashboard per environment; they are never generated or committed.
+
+services:
+  - type: web
+    name: vaquitapp-api-dev
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    branch: develop
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    preDeployCommand: npx prisma migrate deploy
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vaquitapp-db-dev
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENABLE_SCHEDULER
+        value: 'true'
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: LOCAL_STORAGE_SECRET
+        generateValue: true
+      - key: AUTH_RATE_LIMIT_MAX
+        value: '20'
+      - key: AUTH_RATE_LIMIT_WINDOW_MS
+        value: '900000'
+
+  - type: web
+    name: vaquitapp-api-staging
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    branch: staging
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    preDeployCommand: npx prisma migrate deploy
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vaquitapp-db-staging
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENABLE_SCHEDULER
+        value: 'true'
+      # Render's filesystem is ephemeral: local storage would lose every
+      # attachment on the next deploy or restart. S3 credentials are set
+      # manually in the dashboard (sync: false), not known at blueprint time.
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: AUTH_RATE_LIMIT_MAX
+        value: '20'
+      - key: AUTH_RATE_LIMIT_WINDOW_MS
+        value: '900000'
+
+  - type: web
+    name: vaquitapp-api-prod
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /health/ready
+    # "manual (con aprobación)" per README: never deploys automatically,
+    # even after CI passes — someone triggers it from the dashboard.
+    autoDeployTrigger: off
+    preDeployCommand: npx prisma migrate deploy
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vaquitapp-db-prod
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENABLE_SCHEDULER
+        value: 'true'
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: AUTH_RATE_LIMIT_MAX
+        value: '20'
+      - key: AUTH_RATE_LIMIT_WINDOW_MS
+        value: '900000'
+
+databases:
+  - name: vaquitapp-db-dev
+    plan: starter
+    region: oregon
+    databaseName: vaquitapp
+    user: vaquitapp
+
+  - name: vaquitapp-db-staging
+    plan: starter
+    region: oregon
+    databaseName: vaquitapp
+    user: vaquitapp
+
+  - name: vaquitapp-db-prod
+    plan: starter
+    region: oregon
+    databaseName: vaquitapp
+    user: vaquitapp
