@@ -117,45 +117,60 @@ Lo esencial: **el código y los commits se escriben en inglés**, los montos son
 
 Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessToken>`.
 
-| Método | Ruta                                  | Descripción                                                                    |
-| ------ | ------------------------------------- | ------------------------------------------------------------------------------ |
-| POST   | `/auth/register`                      | Crea usuario y devuelve `{ user, accessToken, refreshToken }`                  |
-| POST   | `/auth/login`                         | Login con email + password                                                     |
-| POST   | `/auth/refresh`                       | Rota el refresh token y devuelve un nuevo par                                  |
-| POST   | `/auth/logout`                        | Revoca el refresh token recibido                                               |
-| POST   | `/auth/logout-all`                    | 🔒 Revoca todas las sesiones del usuario                                       |
-| GET    | `/users/me`                           | 🔒 Perfil del usuario autenticado                                              |
-| PATCH  | `/users/me`                           | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode`             |
-| GET    | `/users/me/invitations`               | 🔒 Mis invitaciones pendientes (por email)                                     |
-| POST   | `/households`                         | 🔒 Crea un hogar (el creador queda como `admin`)                               |
-| GET    | `/households`                         | 🔒 Lista los hogares del usuario (con su rol y cantidad de miembros)           |
-| GET    | `/households/:id`                     | 🔒 Detalle del hogar (solo miembros)                                           |
-| PATCH  | `/households/:id`                     | 🔒 Actualiza el hogar (solo admin)                                             |
-| DELETE | `/households/:id`                     | 🔒 Borra el hogar (soft delete, solo admin)                                    |
-| GET    | `/households/:id/members`             | 🔒 Lista miembros activos (solo miembros)                                      |
-| PATCH  | `/households/:id/members/:userId`     | 🔒 Cambia el rol de un miembro (solo admin)                                    |
-| DELETE | `/households/:id/members/:userId`     | 🔒 Quita un miembro (solo admin)                                               |
-| POST   | `/households/:id/invitations`         | 🔒 Invita por email (solo admin)                                               |
-| GET    | `/households/:id/invitations`         | 🔒 Invitaciones del hogar, todos los estados (solo admin)                      |
-| DELETE | `/households/:id/invitations/:id`     | 🔒 Revoca una invitación pendiente (solo admin)                                |
-| POST   | `/invitations/:token/accept`          | 🔒 Acepta una invitación (solo el invitado)                                    |
-| POST   | `/invitations/:token/reject`          | 🔒 Rechaza una invitación (solo el invitado)                                   |
-| GET    | `/categories`                         | Catálogo global de categorías (de sistema)                                     |
-| GET    | `/households/:id/categories`          | 🔒 Globales + propias del hogar                                                |
-| POST   | `/households/:id/categories`          | 🔒 Crea una categoría propia (solo admin)                                      |
-| PATCH  | `/households/:id/categories/:id`      | 🔒 Edita una propia (solo admin)                                               |
-| DELETE | `/households/:id/categories/:id`      | 🔒 Elimina una propia (soft delete, solo admin)                                |
-| POST   | `/households/:id/expenses`            | 🔒 Crea un gasto con sus splits (transaccional)                                |
-| GET    | `/households/:id/expenses`            | 🔒 Lista paginada + filtros (`from,to,categoryId,paidBy,participantId,status`) |
-| GET    | `/households/:id/expenses/:id`        | 🔒 Detalle con splits                                                          |
-| PATCH  | `/households/:id/expenses/:id`        | 🔒 Edita; cambiar el monto recalcula los splits                                |
-| DELETE | `/households/:id/expenses/:id`        | 🔒 Anula (`voided`), no borra                                                  |
-| GET    | `/households/:id/balances`            | 🔒 Balance neto por miembro, derivado (nunca guardado)                         |
-| GET    | `/households/:id/balances/simplified` | 🔒 Deudas simplificadas: quién le paga a quién                                 |
-| POST   | `/households/:id/settlements`         | 🔒 Registra un pago entre dos miembros (solo las partes)                       |
-| GET    | `/households/:id/settlements`         | 🔒 Lista paginada                                                              |
-| DELETE | `/households/:id/settlements/:id`     | 🔒 Anula (`voided`), no borra                                                  |
-| GET    | `/currencies`                         | Catálogo de monedas soportadas                                                 |
+| Método | Ruta                                          | Descripción                                                                    |
+| ------ | --------------------------------------------- | ------------------------------------------------------------------------------ |
+| POST   | `/auth/register`                              | Crea usuario y devuelve `{ user, accessToken, refreshToken }`                  |
+| POST   | `/auth/login`                                 | Login con email + password                                                     |
+| POST   | `/auth/refresh`                               | Rota el refresh token y devuelve un nuevo par                                  |
+| POST   | `/auth/logout`                                | Revoca el refresh token recibido                                               |
+| POST   | `/auth/logout-all`                            | 🔒 Revoca todas las sesiones del usuario                                       |
+| GET    | `/users/me`                                   | 🔒 Perfil del usuario autenticado                                              |
+| PATCH  | `/users/me`                                   | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode`             |
+| GET    | `/users/me/invitations`                       | 🔒 Mis invitaciones pendientes (por email)                                     |
+| POST   | `/households`                                 | 🔒 Crea un hogar (el creador queda como `admin`)                               |
+| GET    | `/households`                                 | 🔒 Lista los hogares del usuario (con su rol y cantidad de miembros)           |
+| GET    | `/households/:id`                             | 🔒 Detalle del hogar (solo miembros)                                           |
+| PATCH  | `/households/:id`                             | 🔒 Actualiza el hogar (solo admin)                                             |
+| DELETE | `/households/:id`                             | 🔒 Borra el hogar (soft delete, solo admin)                                    |
+| GET    | `/households/:id/members`                     | 🔒 Lista miembros activos (solo miembros)                                      |
+| PATCH  | `/households/:id/members/:userId`             | 🔒 Cambia el rol de un miembro (solo admin)                                    |
+| DELETE | `/households/:id/members/:userId`             | 🔒 Quita un miembro (solo admin)                                               |
+| POST   | `/households/:id/invitations`                 | 🔒 Invita por email (solo admin)                                               |
+| GET    | `/households/:id/invitations`                 | 🔒 Invitaciones del hogar, todos los estados (solo admin)                      |
+| DELETE | `/households/:id/invitations/:id`             | 🔒 Revoca una invitación pendiente (solo admin)                                |
+| POST   | `/invitations/:token/accept`                  | 🔒 Acepta una invitación (solo el invitado)                                    |
+| POST   | `/invitations/:token/reject`                  | 🔒 Rechaza una invitación (solo el invitado)                                   |
+| GET    | `/categories`                                 | Catálogo global de categorías (de sistema)                                     |
+| GET    | `/households/:id/categories`                  | 🔒 Globales + propias del hogar                                                |
+| POST   | `/households/:id/categories`                  | 🔒 Crea una categoría propia (solo admin)                                      |
+| PATCH  | `/households/:id/categories/:id`              | 🔒 Edita una propia (solo admin)                                               |
+| DELETE | `/households/:id/categories/:id`              | 🔒 Elimina una propia (soft delete, solo admin)                                |
+| POST   | `/households/:id/expenses`                    | 🔒 Crea un gasto con sus splits (transaccional)                                |
+| GET    | `/households/:id/expenses`                    | 🔒 Lista paginada + filtros (`from,to,categoryId,paidBy,participantId,status`) |
+| GET    | `/households/:id/expenses/:id`                | 🔒 Detalle con splits                                                          |
+| PATCH  | `/households/:id/expenses/:id`                | 🔒 Edita; cambiar el monto recalcula los splits                                |
+| DELETE | `/households/:id/expenses/:id`                | 🔒 Anula (`voided`), no borra                                                  |
+| POST   | `/households/:id/expenses/:id/confirm`        | 🔒 Confirma una ocurrencia `pending` (pasa a `active`)                         |
+| POST   | `/households/:id/expenses/:id/skip`           | 🔒 Omite una ocurrencia `pending` (pasa a `voided`)                            |
+| GET    | `/households/:id/balances`                    | 🔒 Balance neto por miembro, derivado (nunca guardado)                         |
+| GET    | `/households/:id/balances/simplified`         | 🔒 Deudas simplificadas: quién le paga a quién                                 |
+| POST   | `/households/:id/settlements`                 | 🔒 Registra un pago entre dos miembros (solo las partes)                       |
+| GET    | `/households/:id/settlements`                 | 🔒 Lista paginada                                                              |
+| DELETE | `/households/:id/settlements/:id`             | 🔒 Anula (`voided`), no borra                                                  |
+| POST   | `/households/:id/incomes`                     | 🔒 Registra un ingreso (no mueve balances)                                     |
+| GET    | `/households/:id/incomes`                     | 🔒 Lista paginada                                                              |
+| PATCH  | `/households/:id/incomes/:id`                 | 🔒 Edita                                                                       |
+| DELETE | `/households/:id/incomes/:id`                 | 🔒 Anula (`voided`), no borra                                                  |
+| POST   | `/households/:id/transfers`                   | 🔒 Registra una transferencia (no mueve balances, solo las partes)             |
+| GET    | `/households/:id/transfers`                   | 🔒 Lista paginada                                                              |
+| DELETE | `/households/:id/transfers/:id`               | 🔒 Anula (`voided`), no borra                                                  |
+| GET    | `/households/:id/activity`                    | 🔒 Timeline unificado: gastos + ingresos + transferencias + settlements        |
+| POST   | `/households/:id/recurring-expenses`          | 🔒 Define un gasto recurrente                                                  |
+| GET    | `/households/:id/recurring-expenses`          | 🔒 Lista                                                                       |
+| GET    | `/households/:id/recurring-expenses/upcoming` | 🔒 Próximos vencimientos y atrasados                                           |
+| PATCH  | `/households/:id/recurring-expenses/:id`      | 🔒 Edita / activa / desactiva                                                  |
+| DELETE | `/households/:id/recurring-expenses/:id`      | 🔒 Elimina (soft delete)                                                       |
+| GET    | `/currencies`                                 | Catálogo de monedas soportadas                                                 |
 
 **Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del
 que solo se guarda su hash; en cada `/auth/refresh` se rota y, si se reutiliza uno ya revocado,

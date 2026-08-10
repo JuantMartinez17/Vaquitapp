@@ -11,6 +11,14 @@ const envSchema = z.object({
   JWT_REFRESH_TTL: z.string().default('30d'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  // Recurring-expense generation job — must be true on exactly one service
+  // instance, or a scaled-out deployment would generate duplicate
+  // occurrences. z.coerce.boolean() is NOT used here: it treats the string
+  // "false" as truthy, which would silently enable every instance.
+  ENABLE_SCHEDULER: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

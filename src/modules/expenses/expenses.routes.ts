@@ -48,3 +48,15 @@ expensesRouter.delete(
   requireHouseholdMember(),
   expensesController.remove,
 );
+expensesRouter.post(
+  '/:expenseId/confirm',
+  validate(expenseIdParam),
+  requireHouseholdMember(),
+  expensesController.confirm,
+);
+expensesRouter.post(
+  '/:expenseId/skip',
+  validate(expenseIdParam),
+  requireHouseholdMember(),
+  expensesController.skip,
+);

@@ -23,57 +23,11 @@ import type {
   ParticipantInput,
 } from './expenses.schema.js';
 import type { Prisma, SplitType } from '../../generated/prisma/client.js';
+import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import { assertValidCategory } from '../categories/categories.service.js';
 
-const loadActiveHousehold = async (householdId: string) => {
-  const household = await prisma.household.findFirst({
-    where: { id: householdId, deletedAt: null },
-  });
-  if (!household) {
-    throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
-  }
-  return household;
-};
-
-const assertActiveMember = async (
-  householdId: string,
-  userId: string,
-  code: ErrorCode,
-): Promise<void> => {
-  const membership = await prisma.householdMember.findFirst({
-    where: { householdId, userId, leftAt: null },
-  });
-  if (!membership) {
-    throw new ValidationError(`User ${userId} is not an active member of this household`, code);
-  }
-};
-
-const assertActiveMembers = async (
-  householdId: string,
-  userIds: string[],
-  code: ErrorCode,
-): Promise<void> => {
-  const uniqueIds = [...new Set(userIds)];
-  const count = await prisma.householdMember.count({
-    where: { householdId, userId: { in: uniqueIds }, leftAt: null },
-  });
-  if (count !== uniqueIds.length) {
-    throw new ValidationError('All participants must be active members of this household', code);
-  }
-};
-
-const assertValidCategory = async (householdId: string, categoryId: string): Promise<void> => {
-  const category = await prisma.category.findFirst({
-    where: { id: categoryId, deletedAt: null, OR: [{ isSystem: true }, { householdId }] },
-  });
-  if (!category) {
-    throw new ValidationError(
-      'Category must be global or belong to this household',
-      ErrorCode.INVALID_CATEGORY,
-    );
-  }
-};
-
-const computeSplits = (
+/** Dispatches to the right domain split strategy. Reused by recurring-expenses when materializing an occurrence. */
+export const computeSplits = (
   splitType: SplitType,
   amount: string,
   participants: ParticipantInput[],
@@ -150,7 +104,7 @@ const computeSplits = (
   }
 };
 
-const splitsToRows = (splits: SplitResult[], decimalPlaces: number) =>
+export const splitsToRows = (splits: SplitResult[], decimalPlaces: number) =>
   splits.map((s) => ({
     userId: s.userId,
     amount: s.amount.toFixed(decimalPlaces),
@@ -174,7 +128,7 @@ export const createExpense = async (
   householdId: string,
   dto: CreateExpenseDto,
 ): Promise<ExpenseDto> => {
-  const household = await loadActiveHousehold(householdId);
+  const household = await assertHouseholdActive(householdId);
   if (dto.currencyCode !== household.defaultCurrencyCode) {
     throw new ValidationError(
       `Currency must match the household's currency (${household.defaultCurrencyCode})`,
@@ -188,7 +142,7 @@ export const createExpense = async (
     throw new ValidationError('Amount must be greater than zero');
   }
 
-  await assertActiveMember(householdId, dto.paidBy, ErrorCode.INVALID_PAYER);
+  await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
   await assertActiveMembers(
     householdId,
     dto.participants.map((p) => p.userId),
@@ -249,10 +203,10 @@ export const updateExpense = async (
   dto: UpdateExpenseDto,
 ): Promise<ExpenseDto> => {
   await loadActiveExpense(householdId, expenseId);
-  const household = await loadActiveHousehold(householdId);
+  const household = await assertHouseholdActive(householdId);
 
   if (dto.paidBy) {
-    await assertActiveMember(householdId, dto.paidBy, ErrorCode.INVALID_PAYER);
+    await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
   }
   if (dto.categoryId) {
     await assertValidCategory(householdId, dto.categoryId);
@@ -325,6 +279,39 @@ export const updateExpense = async (
 
 export const voidExpense = async (householdId: string, expenseId: string): Promise<void> => {
   await loadActiveExpense(householdId, expenseId);
+  await prisma.expense.update({
+    where: { id: expenseId },
+    data: { status: 'voided', voidedAt: new Date() },
+  });
+};
+
+const loadPendingExpense = async (householdId: string, expenseId: string) => {
+  const expense = await prisma.expense.findFirst({ where: { id: expenseId, householdId } });
+  if (!expense) {
+    throw new NotFoundError('Expense not found');
+  }
+  if (expense.status !== 'pending') {
+    throw new ConflictError(
+      'Only a pending recurring occurrence can be confirmed or skipped',
+      ErrorCode.RECURRING_OCCURRENCE_NOT_PENDING,
+    );
+  }
+  return expense;
+};
+
+/** A pending recurring occurrence becomes a normal active expense — it now counts toward balances. */
+export const confirmExpense = async (
+  householdId: string,
+  expenseId: string,
+): Promise<ExpenseDto> => {
+  await loadPendingExpense(householdId, expenseId);
+  await prisma.expense.update({ where: { id: expenseId }, data: { status: 'active' } });
+  return getExpense(householdId, expenseId);
+};
+
+/** A pending recurring occurrence is voided instead — it never counts toward balances. */
+export const skipExpense = async (householdId: string, expenseId: string): Promise<void> => {
+  await loadPendingExpense(householdId, expenseId);
   await prisma.expense.update({
     where: { id: expenseId },
     data: { status: 'voided', voidedAt: new Date() },

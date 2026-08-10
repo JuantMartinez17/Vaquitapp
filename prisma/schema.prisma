@@ -85,6 +85,11 @@ model User {
   invitationsSent       Invitation[]            @relation("InvitationInviter")
   invitationsReceived   Invitation[]            @relation("InvitationInvitee")
   uploadedAttachments   ExpenseAttachment[]
+  incomesReceived       Income[]                @relation("IncomeReceiver")
+  incomesCreated        Income[]                @relation("IncomeCreator")
+  transfersFrom         Transfer[]              @relation("TransferFrom")
+  transfersTo           Transfer[]              @relation("TransferTo")
+  transfersCreated      Transfer[]              @relation("TransferCreator")
   preferredCurrency     Currency                @relation(fields: [preferredCurrencyCode], references: [code])
 
   @@map("users")
@@ -123,6 +128,10 @@ model Household {
   name                String    @db.VarChar(100)
   description         String?
   defaultCurrencyCode String    @default("ARS") @map("default_currency_code") @db.VarChar(3)
+  // Used to decide which calendar day a recurring expense's occurrence is
+  // due on (D16) — an IANA zone name, not a UTC offset, so it stays correct
+  // across DST changes.
+  timezone            String    @default("America/Argentina/Buenos_Aires") @db.VarChar(50)
   createdBy           String    @map("created_by") @db.Uuid
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz
@@ -136,6 +145,8 @@ model Household {
   recurringExpenses RecurringExpense[]
   settlements       Settlement[]
   categories        Category[]
+  incomes           Income[]
+  transfers         Transfer[]
 
   @@index([createdBy], map: "groups_created_by_idx")
   @@map("households")
@@ -193,6 +204,8 @@ model Currency {
   expenses             Expense[]
   recurringExpenses    RecurringExpense[]
   settlements          Settlement[]
+  incomes              Income[]
+  transfers            Transfer[]
   ratesFrom            ExchangeRate[]     @relation("RateFrom")
   ratesTo              ExchangeRate[]     @relation("RateTo")
 
@@ -233,6 +246,7 @@ model Category {
   household         Household?         @relation(fields: [householdId], references: [id], onDelete: Cascade, map: "categories_group_id_fkey")
   expenses          Expense[]
   recurringExpenses RecurringExpense[]
+  incomes           Income[]
 
   @@index([householdId], map: "categories_group_id_idx")
   @@map("categories")
@@ -269,6 +283,7 @@ model Expense {
   splits           ExpenseSplit[]
   attachments      ExpenseAttachment[]
 
+  @@unique([recurringExpenseId, expenseDate])
   @@index([householdId, expenseDate(sort: Desc)], map: "expenses_group_id_expense_date_idx")
   @@index([categoryId])
   @@index([paidBy])
@@ -394,4 +409,59 @@ model Settlement {
 
   @@index([householdId, settlementDate(sort: Desc)], map: "settlements_group_id_settlement_date_idx")
   @@map("settlements")
+}
+
+// ============================================================
+// INCOME & TRANSFERS
+// ============================================================
+//
+// Neither moves balances between members (SPECS §6.2, §6.3) — they exist
+// for the household's own record-keeping and analytics, not for splitting.
+
+model Income {
+  id           String    @id @default(uuid()) @db.Uuid
+  householdId  String    @map("household_id") @db.Uuid
+  receivedBy   String    @map("received_by") @db.Uuid
+  categoryId   String?   @map("category_id") @db.Uuid
+  description  String    @db.VarChar(255)
+  notes        String?
+  amount       Decimal   @db.Decimal(14, 2)
+  currencyCode String    @map("currency_code") @db.VarChar(3)
+  incomeDate   DateTime  @default(now()) @map("income_date") @db.Date
+  createdBy    String    @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  voidedAt     DateTime? @map("voided_at") @db.Timestamptz
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  receiver  User      @relation("IncomeReceiver", fields: [receivedBy], references: [id])
+  creator   User      @relation("IncomeCreator", fields: [createdBy], references: [id])
+  category  Category? @relation(fields: [categoryId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+
+  @@index([householdId, incomeDate(sort: Desc)])
+  @@map("incomes")
+}
+
+model Transfer {
+  id           String    @id @default(uuid()) @db.Uuid
+  householdId  String    @map("household_id") @db.Uuid
+  fromUser     String    @map("from_user") @db.Uuid
+  toUser       String    @map("to_user") @db.Uuid
+  amount       Decimal   @db.Decimal(14, 2)
+  currencyCode String    @map("currency_code") @db.VarChar(3)
+  transferDate DateTime  @default(now()) @map("transfer_date") @db.Date
+  notes        String?
+  createdBy    String    @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  voidedAt     DateTime? @map("voided_at") @db.Timestamptz
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  from      User      @relation("TransferFrom", fields: [fromUser], references: [id])
+  to        User      @relation("TransferTo", fields: [toUser], references: [id])
+  creator   User      @relation("TransferCreator", fields: [createdBy], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+
+  @@index([householdId, transferDate(sort: Desc)])
+  @@map("transfers")
 }

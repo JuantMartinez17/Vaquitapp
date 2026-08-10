@@ -13,29 +13,7 @@ import type { PaginationQuery } from '../../shared/utils/pagination.js';
 import { SETTLEMENT_INCLUDE, toSettlementDto } from './settlements.mapper.js';
 import type { SettlementDto } from './settlements.mapper.js';
 import type { CreateSettlementDto } from './settlements.schema.js';
-
-const loadActiveHousehold = async (householdId: string) => {
-  const household = await prisma.household.findFirst({
-    where: { id: householdId, deletedAt: null },
-  });
-  if (!household) {
-    throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
-  }
-  return household;
-};
-
-const assertActiveMembers = async (householdId: string, userIds: string[]): Promise<void> => {
-  const uniqueIds = [...new Set(userIds)];
-  const count = await prisma.householdMember.count({
-    where: { householdId, userId: { in: uniqueIds }, leftAt: null },
-  });
-  if (count !== uniqueIds.length) {
-    throw new ValidationError(
-      'Both parties must be active members of this household',
-      ErrorCode.INVALID_SETTLEMENT,
-    );
-  }
-};
+import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
 
 export const createSettlement = async (
   requestingUserId: string,
@@ -54,7 +32,7 @@ export const createSettlement = async (
     throw new ForbiddenError('You can only record a settlement you are a party to');
   }
 
-  const household = await loadActiveHousehold(householdId);
+  const household = await assertHouseholdActive(householdId);
   if (dto.currencyCode !== household.defaultCurrencyCode) {
     throw new ValidationError(
       `Currency must match the household's currency (${household.defaultCurrencyCode})`,
@@ -62,7 +40,7 @@ export const createSettlement = async (
     );
   }
 
-  await assertActiveMembers(householdId, [dto.fromUser, dto.toUser]);
+  await assertActiveMembers(householdId, [dto.fromUser, dto.toUser], ErrorCode.INVALID_SETTLEMENT);
 
   const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
   const amount = roundToCurrency(dto.amount, currency.decimalPlaces);

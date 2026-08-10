@@ -1,7 +1,7 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
-import { BadRequestError, NotFoundError } from '../../shared/errors/errors.js';
+import { BadRequestError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
-import type { MemberRole } from '../../generated/prisma/client.js';
+import type { Household, MemberRole } from '../../generated/prisma/client.js';
 import { toHouseholdDto, toMemberDto } from './households.mapper.js';
 import type { HouseholdDto, MemberDto } from './households.mapper.js';
 import type { CreateHouseholdDto, UpdateHouseholdDto } from './households.schema.js';
@@ -15,6 +15,32 @@ const assertCurrencyExists = async (code: string): Promise<void> => {
 
 const countActiveMembers = (householdId: string): Promise<number> =>
   prisma.householdMember.count({ where: { householdId, leftAt: null } });
+
+/** Loads an active (non-deleted) household, or throws HOUSEHOLD_NOT_FOUND. Reused by every other household-scoped module. */
+export const assertHouseholdActive = async (householdId: string): Promise<Household> => {
+  const household = await prisma.household.findFirst({
+    where: { id: householdId, deletedAt: null },
+  });
+  if (!household) {
+    throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
+  }
+  return household;
+};
+
+/** Confirms every given user is an active member of the household. Reused by every module that references users by id (payer, participants, parties). */
+export const assertActiveMembers = async (
+  householdId: string,
+  userIds: string[],
+  code: ErrorCode,
+): Promise<void> => {
+  const uniqueIds = [...new Set(userIds)];
+  const count = await prisma.householdMember.count({
+    where: { householdId, userId: { in: uniqueIds }, leftAt: null },
+  });
+  if (count !== uniqueIds.length) {
+    throw new ValidationError('All specified users must be active members of this household', code);
+  }
+};
 
 export const createHousehold = async (
   userId: string,
@@ -68,12 +94,7 @@ export const getHousehold = async (
   householdId: string,
   role: MemberRole,
 ): Promise<HouseholdDto> => {
-  const household = await prisma.household.findFirst({
-    where: { id: householdId, deletedAt: null },
-  });
-  if (!household) {
-    throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
-  }
+  const household = await assertHouseholdActive(householdId);
   return toHouseholdDto(household, { role, memberCount: await countActiveMembers(householdId) });
 };
 

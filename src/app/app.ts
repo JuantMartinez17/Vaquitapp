@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { env } from './config.js';
 import { prisma } from '../infrastructure/database/prisma.js';
+import { logger } from '../infrastructure/logging/logger.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
 import { authRouter } from '../modules/auth/auth.routes.js';
 import { usersRouter } from '../modules/users/users.routes.js';
@@ -21,6 +22,10 @@ import {
 import { expensesRouter } from '../modules/expenses/expenses.routes.js';
 import { settlementsRouter } from '../modules/settlements/settlements.routes.js';
 import { balancesRouter } from '../modules/balances/balances.routes.js';
+import { incomesRouter } from '../modules/incomes/incomes.routes.js';
+import { transfersRouter } from '../modules/transfers/transfers.routes.js';
+import { activityRouter } from '../modules/activity/activity.routes.js';
+import { recurringExpensesRouter } from '../modules/recurring-expenses/recurring-expenses.routes.js';
 
 export const app = express();
 
@@ -30,7 +35,7 @@ app.use(cors({ origin: env.CORS_ORIGINS.split(',') }));
 app.use(express.json({ limit: '1mb' }));
 app.use(
   pinoHttp({
-    level: env.LOG_LEVEL,
+    logger,
     // Request ID: reuse the incoming X-Request-Id or generate one, and
     // return it in the response so logs and reports can be correlated.
     genReqId: (req, res) => {
@@ -68,6 +73,10 @@ apiRouter.use('/households/:householdId/categories', householdCategoriesRouter);
 apiRouter.use('/households/:householdId/expenses', expensesRouter);
 apiRouter.use('/households/:householdId/settlements', settlementsRouter);
 apiRouter.use('/households/:householdId/balances', balancesRouter);
+apiRouter.use('/households/:householdId/incomes', incomesRouter);
+apiRouter.use('/households/:householdId/transfers', transfersRouter);
+apiRouter.use('/households/:householdId/activity', activityRouter);
+apiRouter.use('/households/:householdId/recurring-expenses', recurringExpensesRouter);
 apiRouter.use('/currencies', currenciesRouter);
 
 app.use('/api/v1', apiRouter);

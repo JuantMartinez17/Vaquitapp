@@ -36,3 +36,16 @@ export const remove = asyncHandler(async (req, res) => {
   await expensesService.voidExpense(routeParam(req, 'householdId'), routeParam(req, 'expenseId'));
   res.status(204).send();
 });
+
+export const confirm = asyncHandler(async (req, res) => {
+  const expense = await expensesService.confirmExpense(
+    routeParam(req, 'householdId'),
+    routeParam(req, 'expenseId'),
+  );
+  res.json(expense);
+});
+
+export const skip = asyncHandler(async (req, res) => {
+  await expensesService.skipExpense(routeParam(req, 'householdId'), routeParam(req, 'expenseId'));
+  res.status(204).send();
+});

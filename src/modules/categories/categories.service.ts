@@ -1,5 +1,6 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
-import { ForbiddenError, NotFoundError } from '../../shared/errors/errors.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
+import { ErrorCode } from '../../shared/errors/codes.js';
 import { toCategoryDto } from './categories.mapper.js';
 import type { CategoryDto } from './categories.mapper.js';
 import type { CreateCategoryDto, UpdateCategoryDto } from './categories.schema.js';
@@ -34,6 +35,26 @@ export const createCategory = async (
     },
   });
   return toCategoryDto(category);
+};
+
+/**
+ * Confirms a category is usable by this household — either global or owned
+ * by it. Reused by every module that tags activity with a category
+ * (expenses, incomes, recurring expenses).
+ */
+export const assertValidCategory = async (
+  householdId: string,
+  categoryId: string,
+): Promise<void> => {
+  const category = await prisma.category.findFirst({
+    where: { id: categoryId, deletedAt: null, OR: [{ isSystem: true }, { householdId }] },
+  });
+  if (!category) {
+    throw new ValidationError(
+      'Category must be global or belong to this household',
+      ErrorCode.INVALID_CATEGORY,
+    );
+  }
 };
 
 /** Loads a category owned by this household, rejecting system or other-household ones. */
