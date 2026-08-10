@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { asyncHandler } from '../../utils/asyncHandler.js';
+import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import { toUserDto } from '../users/users.mapper.js';
 import * as authService from './auth.service.js';
 import type { AuthResult, RequestMeta } from './auth.service.js';

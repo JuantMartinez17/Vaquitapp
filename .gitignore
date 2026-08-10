@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+/uploads/
 .env
 .env.*
 !.env.example
@@ -11,3 +12,6 @@ coverage/
 .postman/
 postman/
 vaquitapp-apuntes-setup.md
+# documentos de planificación locales (docs/SPECS.md sí se commitea)
+docs/ROADMAP.md
+docs/README.vnext.md
