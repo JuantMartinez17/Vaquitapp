@@ -22,7 +22,7 @@ La especificación de producto vive en [`docs/SPECS.md`](docs/SPECS.md); los cas
 - **Multer** (upload) + **AWS SDK v3** — adjuntos, detrás de la abstracción `FileStorage`
   (`local` en dev, `s3` en producción)
 - **express-rate-limit** — protección de `/auth/*`
-- **OpenAPI 3.1** generado desde los schemas Zod, servido con Swagger UI en `/docs`
+- **OpenAPI 3.0.3** generado desde los schemas Zod, servido con Swagger UI en `/docs`
 - **node:test** (runner nativo de Node, vía `tsx`) + **Supertest** — tests · **ESLint** + **Prettier** — calidad
 
 ## Requisitos
