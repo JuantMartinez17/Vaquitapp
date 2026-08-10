@@ -229,16 +229,21 @@ Postgres desechable (servicio de GitHub Actions).
 
 ## Deploy (Render)
 
-Un Web Service por entorno (`dev`←develop, `staging`←staging, `prod`←main):
+[`render.yaml`](render.yaml) es un Blueprint: un Web Service + un PostgreSQL gestionado por
+entorno (`dev`←develop, `staging`←staging, `prod`←main), construidos desde el
+[`Dockerfile`](Dockerfile) multi-stage (build compila con todas las dependencias; runtime
+solo lleva `dist/`, `node_modules` de producción, y `prisma/` + la CLI de Prisma para el
+Pre-Deploy). Revisar el Blueprint antes de aplicarlo — plan/región son el mínimo pago, y los
+secrets marcados `sync: false` (CORS, credenciales S3) se completan a mano en el dashboard de
+Render, nunca en el repo.
 
-- **Build**: `npm ci && npx prisma generate && npm run build`
-- **Pre-Deploy**: `npx prisma migrate deploy` (migraciones antes de activar la versión)
-- **Start**: `node dist/server.js`
-- **Health Check Path**: `/health/ready`
-- **Auto-Deploy**: "After CI Checks Pass" (no se despliega un build roto)
-
-Un PostgreSQL gestionado por entorno. Secrets (JWT nuevos por entorno, S3, SMTP, Sentry)
-se configuran en Render, nunca en el repo.
+- **Build / Pre-Deploy / Start**: definidos por el Dockerfile — generar cliente y compilar,
+  `npx prisma migrate deploy` antes de activar la versión, y `node dist/server.js`.
+- **Health Check Path**: `/health/ready`.
+- **Auto-Deploy**: `dev`/`staging` despliegan solo tras CI en verde ("After CI Checks Pass");
+  `prod` nunca despliega automáticamente, se dispara a mano desde el dashboard.
+- **Almacenamiento**: `dev` usa `STORAGE_PROVIDER=local`; `staging`/`prod` usan `s3` — el
+  filesystem de Render es efímero, así que local perdería los adjuntos en cada deploy.
 
 ## Roadmap
 
