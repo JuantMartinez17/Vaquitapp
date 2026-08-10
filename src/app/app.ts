@@ -29,6 +29,7 @@ import { recurringExpensesRouter } from '../modules/recurring-expenses/recurring
 import { attachmentsRouter } from '../modules/attachments/attachments.routes.js';
 import { localFilesRouter } from '../infrastructure/storage/local-files.routes.js';
 import { analyticsRouter } from '../modules/analytics/analytics.routes.js';
+import { openApiRouter } from '../infrastructure/openapi/openapi.routes.js';
 
 export const app = express();
 
@@ -68,6 +69,10 @@ app.get('/health/ready', async (_req, res) => {
     res.status(503).json({ status: 'not ready', database: 'disconnected' });
   }
 });
+
+// API documentation, generated from the same Zod schemas that validate
+// requests (F10). Not versioned like /api/v1: it describes the whole API.
+app.use('/docs', openApiRouter);
 
 // API v1 routes
 const apiRouter = express.Router();
