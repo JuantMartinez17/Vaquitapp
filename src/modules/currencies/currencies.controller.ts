@@ -1,4 +1,4 @@
-import { asyncHandler } from '../../utils/asyncHandler.js';
+import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import * as currenciesService from './currencies.service.js';
 
 export const list = asyncHandler(async (_req, res) => {

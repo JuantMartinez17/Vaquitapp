@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
-import { prisma } from '../../config/prisma.js';
-import { ConflictError, BadRequestError, UnauthorizedError } from '../../utils/errors.js';
+import { prisma } from '../../infrastructure/database/prisma.js';
+import { ConflictError, BadRequestError, UnauthorizedError } from '../../shared/errors/errors.js';
+import { ErrorCode } from '../../shared/errors/codes.js';
 import type { User } from '../../generated/prisma/client.js';
 import type { RegisterDto, LoginDto } from './auth.schema.js';
 import {
@@ -26,7 +27,7 @@ export interface AuthResult extends TokenPair {
   user: User;
 }
 
-/** Crea un refresh token persistido (hash) y devuelve el par de tokens. */
+/** Creates a persisted (hashed) refresh token and returns the token pair. */
 const issueTokens = async (user: User, meta: RequestMeta): Promise<TokenPair> => {
   const refreshToken = generateRefreshToken();
   await prisma.refreshToken.create({
@@ -44,7 +45,7 @@ const issueTokens = async (user: User, meta: RequestMeta): Promise<TokenPair> =>
 const assertCurrencyExists = async (code: string): Promise<void> => {
   const currency = await prisma.currency.findUnique({ where: { code } });
   if (!currency) {
-    throw new BadRequestError(`Moneda no soportada: ${code}`);
+    throw new BadRequestError(`Unsupported currency: ${code}`);
   }
 };
 
@@ -53,7 +54,10 @@ export const register = async (input: RegisterDto, meta: RequestMeta): Promise<A
     where: { OR: [{ email: input.email }, { username: input.username }] },
   });
   if (existing) {
-    throw new ConflictError('Ya existe un usuario con ese email o username');
+    throw new ConflictError(
+      'A user with that email or username already exists',
+      ErrorCode.EMAIL_ALREADY_REGISTERED,
+    );
   }
 
   if (input.preferredCurrencyCode) {
@@ -76,22 +80,22 @@ export const register = async (input: RegisterDto, meta: RequestMeta): Promise<A
 
 export const login = async (input: LoginDto, meta: RequestMeta): Promise<AuthResult> => {
   const user = await prisma.user.findFirst({ where: { email: input.email, deletedAt: null } });
-  // Mensaje genérico: no revelamos si falló el email o la contraseña.
+  // Generic message: we don't reveal whether the email or the password failed.
   if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) {
-    throw new UnauthorizedError('Credenciales inválidas');
+    throw new UnauthorizedError('Invalid credentials', ErrorCode.INVALID_CREDENTIALS);
   }
   return { user, ...(await issueTokens(user, meta)) };
 };
 
 /**
- * Rotación de refresh token con detección de reuso.
- * Si llega un token ya revocado → se asume robo y se revocan TODAS las sesiones.
+ * Refresh token rotation with reuse detection.
+ * If an already-revoked token comes in, we assume theft and revoke ALL sessions.
  */
 export const refresh = async (rawToken: string, meta: RequestMeta): Promise<TokenPair> => {
   const tokenHash = hashToken(rawToken);
   const stored = await prisma.refreshToken.findUnique({ where: { tokenHash } });
   if (!stored) {
-    throw new UnauthorizedError('Refresh token inválido');
+    throw new UnauthorizedError('Invalid refresh token');
   }
 
   if (stored.revokedAt) {
@@ -99,16 +103,19 @@ export const refresh = async (rawToken: string, meta: RequestMeta): Promise<Toke
       where: { userId: stored.userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
-    throw new UnauthorizedError('Refresh token reutilizado; se revocaron todas las sesiones');
+    throw new UnauthorizedError(
+      'Refresh token reused; all sessions were revoked',
+      ErrorCode.TOKEN_REUSE_DETECTED,
+    );
   }
 
   if (stored.expiresAt < new Date()) {
-    throw new UnauthorizedError('Refresh token expirado');
+    throw new UnauthorizedError('Refresh token expired');
   }
 
   const user = await prisma.user.findFirst({ where: { id: stored.userId, deletedAt: null } });
   if (!user) {
-    throw new UnauthorizedError('Usuario no encontrado');
+    throw new UnauthorizedError('User not found');
   }
 
   const newRefreshToken = generateRefreshToken();
@@ -131,7 +138,7 @@ export const refresh = async (rawToken: string, meta: RequestMeta): Promise<Toke
   };
 };
 
-/** Revoca un refresh token puntual (logout de la sesión actual). */
+/** Revokes a single refresh token (logout of the current session). */
 export const logout = async (rawToken: string): Promise<void> => {
   await prisma.refreshToken.updateMany({
     where: { tokenHash: hashToken(rawToken), revokedAt: null },
@@ -139,7 +146,7 @@ export const logout = async (rawToken: string): Promise<void> => {
   });
 };
 
-/** Revoca todas las sesiones activas del usuario. */
+/** Revokes every active session for the user. */
 export const logoutAll = async (userId: string): Promise<void> => {
   await prisma.refreshToken.updateMany({
     where: { userId, revokedAt: null },

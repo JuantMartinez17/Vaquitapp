@@ -3,5 +3,5 @@ import * as currenciesController from './currencies.controller.js';
 
 export const currenciesRouter = Router();
 
-// Catálogo público de monedas soportadas (lo consume el front para selects).
+// Public catalog of supported currencies (consumed by the frontend for selects).
 currenciesRouter.get('/', currenciesController.list);
