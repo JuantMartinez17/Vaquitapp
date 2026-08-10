@@ -114,6 +114,12 @@ Lo esencial: **el código y los commits se escriben en inglés**, los montos son
 - **Autorización**: rutas household-scoped protegidas con `requireHouseholdMember(role?)`
   ([`authorization.middleware.ts`](src/app/middleware/authorization.middleware.ts)); valida
   membresía activa y, opcionalmente, rol `admin`. Carga `req.membership`.
+- **Idempotencia**: header `Idempotency-Key` (UUID) **obligatorio** al crear gastos,
+  settlements e incomes. Repetir la misma key con el mismo body devuelve la respuesta
+  original en vez de duplicar; con un body distinto, `409 IDEMPOTENCY_KEY_CONFLICT`
+  ([`idempotency.middleware.ts`](src/app/middleware/idempotency.middleware.ts)).
+- **Rate limiting**: `/auth/register`, `/auth/login` y `/auth/refresh` limitan a
+  `AUTH_RATE_LIMIT_MAX` intentos por IP cada `AUTH_RATE_LIMIT_WINDOW_MS` (`429 RATE_LIMITED`).
 
 ### Endpoints (v1)
 
