@@ -1,6 +1,6 @@
-import { app } from './app.js';
-import { env } from './config/env.js';
-import { prisma } from './config/prisma.js';
+import { app } from './app/app.js';
+import { env } from './app/config.js';
+import { prisma } from './infrastructure/database/prisma.js';
 
 const server = app.listen(env.PORT, () => {
   console.log(`🚀 Vaquitapp API listening on http://localhost:${env.PORT}`);

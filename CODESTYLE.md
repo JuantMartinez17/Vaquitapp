@@ -134,7 +134,7 @@ Eso se diseña, no se improvisa.
 
 ### 4.1 Los errores llevan contexto
 
-Usá las clases de [`src/utils/errors.ts`](src/utils/errors.ts). Cada error tiene `code`
+Usá las clases de [`src/shared/errors/errors.ts`](src/shared/errors/errors.ts). Cada error tiene `code`
 estable, `statusCode` y `details` opcionales. Nunca tires un string.
 
 ```ts
@@ -185,7 +185,7 @@ console.log('Gasto creado ' + expenseId);
 ```
 
 Las únicas excepciones —y están declaradas en `eslint.config.js`— son
-[`src/config/env.ts`](src/config/env.ts) (falla antes de que exista el logger) y
+[`src/app/config.ts`](src/app/config.ts) (falla antes de que exista el logger) y
 [`src/server.ts`](src/server.ts) (arranque y apagado). Los scripts de `prisma/` tampoco son
 código de aplicación.
 
@@ -210,7 +210,7 @@ void sendInvitationEmail(email).catch((error: unknown) => {
 ```
 
 Todo handler async de Express va envuelto en
-[`asyncHandler`](src/utils/asyncHandler.ts). Si no, Express 5 se traga el rechazo y el cliente
+[`asyncHandler`](src/shared/utils/asyncHandler.ts). Si no, Express 5 se traga el rechazo y el cliente
 espera para siempre.
 
 ### 4.5 La lógica financiera es pura
@@ -366,7 +366,7 @@ La regla que no se rompe nunca: **cero punto flotante en cálculos monetarios.**
 - En la base: `numeric(14,2)`.
 - En el código: `Decimal` (decimal.js). `parseFloat` está prohibido por ESLint.
 - En JSON: **string** (`"85000.00"`), nunca `number`.
-- Al repartir: [`allocate`](src/utils/money.ts), que garantiza `Σ(partes) == total`.
+- Al repartir: [`allocate`](src/domain/splitting/allocate.ts), que garantiza `Σ(partes) == total`.
 - Los decimales salen de la moneda (`Currency.decimalPlaces`), no de un `2` hardcodeado.
 
 ```ts

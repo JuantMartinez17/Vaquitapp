@@ -27,23 +27,23 @@ async function main() {
   }
   console.log(`✓ ${currencies.length} monedas`);
 
-  // Categorías de sistema
+  // Categorías de sistema (SPECS.md §2, catálogo inicial).
   const systemCategories = [
-    { name: 'Alimentación', icon: 'utensils', color: '#FF6B6B' },
     { name: 'Vivienda', icon: 'home', color: '#4ECDC4' },
-    { name: 'Servicios', icon: 'zap', color: '#FFE66D' },
+    { name: 'Comida', icon: 'utensils', color: '#FF6B6B' },
     { name: 'Transporte', icon: 'car', color: '#95E1D3' },
+    { name: 'Ocio', icon: 'film', color: '#AA96DA' },
     { name: 'Salud', icon: 'heart', color: '#F38181' },
-    { name: 'Entretenimiento', icon: 'film', color: '#AA96DA' },
-    { name: 'Compras', icon: 'shopping-bag', color: '#FCBAD3' },
+    { name: 'Higiene', icon: 'droplet', color: '#FFD3B6' },
     { name: 'Educación', icon: 'book', color: '#A8D8EA' },
-    { name: 'Viajes', icon: 'plane', color: '#FFAAA5' },
+    { name: 'Tecnología', icon: 'cpu', color: '#6C5CE7' },
+    { name: 'Servicios', icon: 'zap', color: '#FFE66D' },
     { name: 'Otros', icon: 'more-horizontal', color: '#B8B8B8' },
   ];
 
   for (const category of systemCategories) {
     const existing = await prisma.category.findFirst({
-      where: { name: category.name, isSystem: true, groupId: null },
+      where: { name: category.name, isSystem: true, householdId: null },
     });
     if (!existing) {
       await prisma.category.create({

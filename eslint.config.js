@@ -88,9 +88,9 @@ export default tseslint.config(
   },
 
   // ── Bootstrap and CLI: console is the only logger available ───────────────
-  // env.ts fails before pino is configured; server.ts logs start/stop.
+  // config.ts fails before pino is configured; server.ts logs start/stop.
   {
-    files: ['src/server.ts', 'src/config/env.ts'],
+    files: ['src/server.ts', 'src/app/config.ts'],
     rules: { 'no-console': 'off' },
   },
 
@@ -108,12 +108,20 @@ export default tseslint.config(
               message: 'The domain layer must not know about HTTP.',
             },
             {
-              group: ['@prisma/client', '**/generated/prisma/**', '**/config/prisma*'],
+              group: ['@prisma/client', '**/generated/prisma/**', '**/infrastructure/**'],
               message: 'The domain layer must not know about persistence.',
             },
           ],
         },
       ],
+    },
+  },
+
+  // ── Standalone Node scripts outside tsconfig's program ────────────────────
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { process: 'readonly' },
     },
   },
 

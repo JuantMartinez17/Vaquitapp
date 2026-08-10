@@ -1,6 +1,6 @@
 # Vaquitapp — Backend
 
-API de **gastos compartidos** (estilo Splitwise / "armar una vaquita"): grupos,
+API de **gastos compartidos** (estilo Splitwise / "armar una vaquita"): hogares,
 gastos divididos de varias formas, cálculo de quién le debe a quién, settlements,
 gastos recurrentes, adjuntos y multi-moneda.
 
@@ -48,33 +48,35 @@ La API queda en `http://localhost:3000`. Health checks:
 
 ## Scripts
 
-| Script                                      | Qué hace                                 |
-| ------------------------------------------- | ---------------------------------------- |
-| `npm run dev`                               | Servidor con hot reload (tsx)            |
-| `npm run build`                             | Compila TypeScript a `dist/`             |
-| `npm start`                                 | Corre la build (`node dist/server.js`)   |
-| `npm run typecheck`                         | Type check sin emitir (`tsc --noEmit`)   |
-| `npm run lint` / `lint:fix`                 | ESLint                                   |
-| `npm run format` / `format:check`           | Prettier                                 |
-| `npm test` / `test:watch` / `test:coverage` | Tests con el runner nativo (`node:test`) |
-| `npm run prisma:generate`                   | Genera el cliente de Prisma              |
-| `npm run prisma:migrate`                    | Crea/aplica migraciones (dev)            |
-| `npm run prisma:studio`                     | GUI de la base                           |
-| `npm run prisma:seed`                       | Seed de monedas y categorías             |
+| Script                                 | Qué hace                                 |
+| -------------------------------------- | ---------------------------------------- |
+| `npm run dev`                          | Servidor con hot reload (tsx)            |
+| `npm run build`                        | Compila TypeScript a `dist/`             |
+| `npm start`                            | Corre la build (`node dist/server.js`)   |
+| `npm run typecheck`                    | Type check sin emitir (`tsc --noEmit`)   |
+| `npm run lint` / `lint:fix`            | ESLint                                   |
+| `npm run format` / `format:check`      | Prettier                                 |
+| `npm test`                             | `test:unit` + `test:integration`         |
+| `npm run test:unit`                    | Dominio puro, sin base (`*.test.ts`)     |
+| `npm run test:integration`             | Contra Postgres (`*.itest.ts`)           |
+| `npm run test:watch` / `test:coverage` | Tests con el runner nativo (`node:test`) |
+| `npm run prisma:generate`              | Genera el cliente de Prisma              |
+| `npm run prisma:migrate`               | Crea/aplica migraciones (dev)            |
+| `npm run prisma:studio`                | GUI de la base                           |
+| `npm run prisma:seed`                  | Seed de monedas y categorías             |
 
 ## Estructura
 
 ```
 src/
-├── app.ts                 # Configuración de Express (middlewares, health, router)
-├── server.ts              # Arranque + graceful shutdown
-├── config/                # env (validado con Zod) y cliente Prisma
-├── middlewares/           # error, validate, auth
-├── modules/<name>/        # un módulo por dominio (routes/controller/service/schema/mapper)
-├── utils/                 # errors, asyncHandler, money, pagination
-└── types/                 # augmentations de tipos (Express.Request)
-prisma/                    # schema, migraciones y seed
-docs/                      # SPECS.md — spec técnico-funcional del producto
+├── app/                    # app.ts (Express: middlewares, health, router) + config.ts + middleware/
+├── server.ts               # Arranque + graceful shutdown
+├── modules/<name>/         # un módulo por dominio (routes/controller/service/schema/mapper)
+├── domain/                 # puro: sin Express, sin Prisma — money/, splitting/
+├── infrastructure/         # database/ (cliente Prisma)
+└── shared/                 # errors/, types/, utils/ (asyncHandler, pagination, duration)
+prisma/                     # schema, migraciones y seed
+docs/                       # SPECS.md — spec técnico-funcional del producto
 ```
 
 ### Convenciones de código
@@ -95,43 +97,65 @@ Lo esencial: **el código y los commits se escriben en inglés**, los montos son
 ### Convenciones de la API
 
 - **Errores**: respuesta uniforme `{ error: { code, message, details? } }`. Se lanzan
-  las clases de [`src/utils/errors.ts`](src/utils/errors.ts) (`NotFoundError`,
-  `ForbiddenError`, etc.) y las centraliza [`error.middleware.ts`](src/middlewares/error.middleware.ts).
-- **Async**: todo handler async se envuelve en [`asyncHandler`](src/utils/asyncHandler.ts).
-- **Validación**: [`validate.middleware.ts`](src/middlewares/validate.middleware.ts) con
+  las clases de [`src/shared/errors/errors.ts`](src/shared/errors/errors.ts) (`NotFoundError`,
+  `ForbiddenError`, etc.) y las centraliza
+  [`error.middleware.ts`](src/app/middleware/error.middleware.ts).
+- **Async**: todo handler async se envuelve en
+  [`asyncHandler`](src/shared/utils/asyncHandler.ts).
+- **Validación**: [`validate.middleware.ts`](src/app/middleware/validate.middleware.ts) con
   schemas Zod (`body`/`params`/`query`). El query validado vive en `req.validatedQuery`.
 - **Dinero**: montos siempre en `Decimal`; en JSON viajan como **string**. La división de
-  gastos usa [`allocate`](src/utils/money.ts) (método del mayor resto) para que la suma
-  de las partes sea exactamente el total.
-- **Paginación**: cursor-based con [`pagination.ts`](src/utils/pagination.ts).
+  gastos usa [`allocate`](src/domain/splitting/allocate.ts) (método del mayor resto) para que la
+  suma de las partes sea exactamente el total.
+- **Paginación**: cursor-based con [`pagination.ts`](src/shared/utils/pagination.ts).
 - **Auth**: bearer token (`Authorization: Bearer <access>`); refresh con rotación.
-- **Autorización**: rutas group-scoped protegidas con `requireGroupMember(role?)`
-  ([`authorization.middleware.ts`](src/middlewares/authorization.middleware.ts)); valida membresía
-  activa y, opcionalmente, rol `admin`. Carga `req.membership`.
+- **Autorización**: rutas household-scoped protegidas con `requireHouseholdMember(role?)`
+  ([`authorization.middleware.ts`](src/app/middleware/authorization.middleware.ts)); valida
+  membresía activa y, opcionalmente, rol `admin`. Carga `req.membership`.
 
 ### Endpoints (v1)
 
 Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessToken>`.
 
-| Método | Ruta                          | Descripción                                                         |
-| ------ | ----------------------------- | ------------------------------------------------------------------- |
-| POST   | `/auth/register`              | Crea usuario y devuelve `{ user, accessToken, refreshToken }`       |
-| POST   | `/auth/login`                 | Login con email + password                                          |
-| POST   | `/auth/refresh`               | Rota el refresh token y devuelve un nuevo par                       |
-| POST   | `/auth/logout`                | Revoca el refresh token recibido                                    |
-| POST   | `/auth/logout-all`            | 🔒 Revoca todas las sesiones del usuario                            |
-| GET    | `/users/me`                   | 🔒 Perfil del usuario autenticado                                   |
-| PATCH  | `/users/me`                   | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode`  |
-| POST   | `/groups`                     | 🔒 Crea un grupo (el creador queda como `admin`)                    |
-| GET    | `/groups`                     | 🔒 Lista los grupos del usuario (con su rol y cantidad de miembros) |
-| GET    | `/groups/:id`                 | 🔒 Detalle del grupo (solo miembros)                                |
-| PATCH  | `/groups/:id`                 | 🔒 Actualiza el grupo (solo admin)                                  |
-| DELETE | `/groups/:id`                 | 🔒 Borra el grupo (soft delete, solo admin)                         |
-| GET    | `/groups/:id/members`         | 🔒 Lista miembros activos (solo miembros)                           |
-| POST   | `/groups/:id/members`         | 🔒 Agrega un miembro por email (solo admin)                         |
-| PATCH  | `/groups/:id/members/:userId` | 🔒 Cambia el rol de un miembro (solo admin)                         |
-| DELETE | `/groups/:id/members/:userId` | 🔒 Quita un miembro (solo admin)                                    |
-| GET    | `/currencies`                 | Catálogo de monedas soportadas                                      |
+| Método | Ruta                                  | Descripción                                                                    |
+| ------ | ------------------------------------- | ------------------------------------------------------------------------------ |
+| POST   | `/auth/register`                      | Crea usuario y devuelve `{ user, accessToken, refreshToken }`                  |
+| POST   | `/auth/login`                         | Login con email + password                                                     |
+| POST   | `/auth/refresh`                       | Rota el refresh token y devuelve un nuevo par                                  |
+| POST   | `/auth/logout`                        | Revoca el refresh token recibido                                               |
+| POST   | `/auth/logout-all`                    | 🔒 Revoca todas las sesiones del usuario                                       |
+| GET    | `/users/me`                           | 🔒 Perfil del usuario autenticado                                              |
+| PATCH  | `/users/me`                           | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode`             |
+| GET    | `/users/me/invitations`               | 🔒 Mis invitaciones pendientes (por email)                                     |
+| POST   | `/households`                         | 🔒 Crea un hogar (el creador queda como `admin`)                               |
+| GET    | `/households`                         | 🔒 Lista los hogares del usuario (con su rol y cantidad de miembros)           |
+| GET    | `/households/:id`                     | 🔒 Detalle del hogar (solo miembros)                                           |
+| PATCH  | `/households/:id`                     | 🔒 Actualiza el hogar (solo admin)                                             |
+| DELETE | `/households/:id`                     | 🔒 Borra el hogar (soft delete, solo admin)                                    |
+| GET    | `/households/:id/members`             | 🔒 Lista miembros activos (solo miembros)                                      |
+| PATCH  | `/households/:id/members/:userId`     | 🔒 Cambia el rol de un miembro (solo admin)                                    |
+| DELETE | `/households/:id/members/:userId`     | 🔒 Quita un miembro (solo admin)                                               |
+| POST   | `/households/:id/invitations`         | 🔒 Invita por email (solo admin)                                               |
+| GET    | `/households/:id/invitations`         | 🔒 Invitaciones del hogar, todos los estados (solo admin)                      |
+| DELETE | `/households/:id/invitations/:id`     | 🔒 Revoca una invitación pendiente (solo admin)                                |
+| POST   | `/invitations/:token/accept`          | 🔒 Acepta una invitación (solo el invitado)                                    |
+| POST   | `/invitations/:token/reject`          | 🔒 Rechaza una invitación (solo el invitado)                                   |
+| GET    | `/categories`                         | Catálogo global de categorías (de sistema)                                     |
+| GET    | `/households/:id/categories`          | 🔒 Globales + propias del hogar                                                |
+| POST   | `/households/:id/categories`          | 🔒 Crea una categoría propia (solo admin)                                      |
+| PATCH  | `/households/:id/categories/:id`      | 🔒 Edita una propia (solo admin)                                               |
+| DELETE | `/households/:id/categories/:id`      | 🔒 Elimina una propia (soft delete, solo admin)                                |
+| POST   | `/households/:id/expenses`            | 🔒 Crea un gasto con sus splits (transaccional)                                |
+| GET    | `/households/:id/expenses`            | 🔒 Lista paginada + filtros (`from,to,categoryId,paidBy,participantId,status`) |
+| GET    | `/households/:id/expenses/:id`        | 🔒 Detalle con splits                                                          |
+| PATCH  | `/households/:id/expenses/:id`        | 🔒 Edita; cambiar el monto recalcula los splits                                |
+| DELETE | `/households/:id/expenses/:id`        | 🔒 Anula (`voided`), no borra                                                  |
+| GET    | `/households/:id/balances`            | 🔒 Balance neto por miembro, derivado (nunca guardado)                         |
+| GET    | `/households/:id/balances/simplified` | 🔒 Deudas simplificadas: quién le paga a quién                                 |
+| POST   | `/households/:id/settlements`         | 🔒 Registra un pago entre dos miembros (solo las partes)                       |
+| GET    | `/households/:id/settlements`         | 🔒 Lista paginada                                                              |
+| DELETE | `/households/:id/settlements/:id`     | 🔒 Anula (`voided`), no borra                                                  |
+| GET    | `/currencies`                         | Catálogo de monedas soportadas                                                 |
 
 **Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del
 que solo se guarda su hash; en cada `/auth/refresh` se rota y, si se reutiliza uno ya revocado,
@@ -182,6 +206,6 @@ se configuran en Render, nunca en el repo.
 
 ## Roadmap
 
-El backend se construye por fases (auth → grupos → invitaciones → gastos/splits →
+El backend se construye por fases (auth → hogares → invitaciones → gastos/splits →
 balances/settlements → recurrentes → adjuntos/multi-moneda → reportes/hardening →
 OpenAPI/CI/CD). Cada fase es entregable y testeable por separado.
