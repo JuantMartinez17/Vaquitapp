@@ -55,3 +55,9 @@ export class ValidationError extends AppError {
     super(message, 422, code, details);
   }
 }
+
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too many requests', code: ErrorCode = ErrorCode.RATE_LIMITED) {
+    super(message, 429, code);
+  }
+}

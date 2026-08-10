@@ -8,3 +8,10 @@
 // but real errors should still surface.
 process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
+
+// registerTestUser (shared/testing/http.ts) alone makes dozens of real
+// /auth/register calls per integration test file; the production default
+// (20 per 15 min) would trip well before a file's fixtures finish setting
+// up. The limiter's own enforcement is covered directly, with a low
+// deterministic limit, in rate-limit.test.ts.
+process.env.AUTH_RATE_LIMIT_MAX = '100000';

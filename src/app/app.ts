@@ -32,6 +32,11 @@ import { analyticsRouter } from '../modules/analytics/analytics.routes.js';
 
 export const app = express();
 
+// Render (and most PaaS) sit behind a reverse proxy: without this, req.ip is
+// the proxy's address for every request, and IP-based rate limiting would
+// lump all clients into one bucket instead of limiting per real client.
+app.set('trust proxy', 1);
+
 // Global middlewares
 app.use(helmet());
 app.use(cors({ origin: env.CORS_ORIGINS.split(',') }));

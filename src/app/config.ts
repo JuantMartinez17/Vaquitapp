@@ -11,6 +11,15 @@ const envSchema = z.object({
   JWT_REFRESH_TTL: z.string().default('30d'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  // Rate limiting (D-none, F10 hardening) on /auth/register, /login,
+  // /refresh — the brute-force/credential-stuffing surface. The test suite
+  // raises AUTH_RATE_LIMIT_MAX (scripts/test-env.mjs) since fixture setup
+  // alone (registerTestUser) makes dozens of real /auth calls per file.
+  AUTH_RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .positive()
+    .default(15 * 60 * 1000),
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().positive().default(20),
   // Recurring-expense generation job — must be true on exactly one service
   // instance, or a scaled-out deployment would generate duplicate
   // occurrences. z.coerce.boolean() is NOT used here: it treats the string
