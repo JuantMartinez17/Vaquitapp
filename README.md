@@ -1,8 +1,14 @@
 # Vaquitapp — Backend
 
-API de **gastos compartidos** (estilo Splitwise / "armar una vaquita"): hogares,
-gastos divididos de varias formas, cálculo de quién le debe a quién, settlements,
-gastos recurrentes, adjuntos y multi-moneda.
+**Una agenda económica del hogar en la que compartir gastos es una capacidad de primera clase.**
+
+No responde solo _"¿quién le debe a quién?"_ (eso ya lo hacía Splitwise), sino _"¿qué pasó con
+nuestra plata, a dónde se fue y qué viene después?"_: hogares, gastos divididos de cuatro
+formas, ingresos, transferencias, balances derivados, settlements, gastos recurrentes,
+comprobantes adjuntos y analytics.
+
+La especificación de producto vive en [`docs/SPECS.md`](docs/SPECS.md); los casos de uso, en
+[`docs/specs/`](docs/specs/).
 
 ## Stack
 
@@ -15,6 +21,8 @@ gastos recurrentes, adjuntos y multi-moneda.
 - **Decimal.js** — aritmética de dinero (nunca floats)
 - **Multer** (upload) + **AWS SDK v3** — adjuntos, detrás de la abstracción `FileStorage`
   (`local` en dev, `s3` en producción)
+- **express-rate-limit** — protección de `/auth/*`
+- **OpenAPI 3.1** generado desde los schemas Zod, servido con Swagger UI en `/docs`
 - **node:test** (runner nativo de Node, vía `tsx`) + **Supertest** — tests · **ESLint** + **Prettier** — calidad
 
 ## Requisitos
@@ -43,10 +51,13 @@ npm run prisma:seed         # carga monedas y categorías de sistema
 npm run dev
 ```
 
-La API queda en `http://localhost:3000`. Health checks:
+La API queda en `http://localhost:3000`:
 
 - `GET /health` — liveness
 - `GET /health/ready` — readiness (verifica la conexión a la base)
+- `GET /docs` — **Swagger UI**, generado desde los mismos schemas Zod que validan cada
+  request (no puede desfasarse del comportamiento real)
+- `GET /docs/openapi.json` — la spec OpenAPI cruda
 
 ## Scripts
 
@@ -71,15 +82,35 @@ La API queda en `http://localhost:3000`. Health checks:
 
 ```
 src/
-├── app/                    # app.ts (Express: middlewares, health, router) + config.ts + middleware/
-├── server.ts               # Arranque + graceful shutdown
+├── server.ts               # Arranque, scheduler y graceful shutdown
+├── app/
+│   ├── app.ts              # Express: middlewares globales, health, /docs, router /api/v1
+│   ├── config.ts           # env validado con Zod (si falta algo, el proceso no levanta)
+│   └── middleware/         # auth · authorization · validate · error · idempotency · rate-limit
 ├── modules/<name>/         # un módulo por dominio (routes/controller/service/schema/mapper)
-├── domain/                 # puro: sin Express, sin Prisma — money/, splitting/
-├── infrastructure/         # database/ (cliente Prisma)
-└── shared/                 # errors/, types/, utils/ (asyncHandler, pagination, duration)
+├── domain/                 # ⭐ puro: sin Express, sin Prisma (lo corta ESLint)
+│   ├── money/              # Decimal, redondeo por moneda, formato
+│   ├── splitting/          # allocate (mayor resto) + las 4 estrategias
+│   ├── balances/           # (actividad) → balances + simplificación de deudas
+│   ├── recurrence/         # cálculo de próximas ocurrencias
+│   └── files/              # sniffing de MIME por magic bytes
+├── infrastructure/
+│   ├── database/           # cliente Prisma
+│   ├── storage/            # FileStorage: local | s3
+│   ├── logging/            # Pino
+│   ├── scheduler/          # runner genérico de jobs periódicos
+│   └── openapi/            # spec generada desde los schemas Zod
+└── shared/                 # errors/ (+ catálogo de codes) · types/ · utils/ · testing/
 prisma/                     # schema, migraciones y seed
-docs/                       # SPECS.md — spec técnico-funcional del producto
+docs/
+├── SPECS.md                # spec técnico-funcional del producto
+├── specs/                  # una spec por caso de uso
+└── runbooks/               # restore-drill.md
 ```
+
+Los módulos implementados son: `auth`, `users`, `households`, `invitations`, `categories`,
+`currencies`, `expenses`, `settlements`, `balances`, `incomes`, `transfers`, `activity`,
+`recurring-expenses`, `attachments` y `analytics`.
 
 ### Convenciones de código
 
@@ -110,6 +141,14 @@ Lo esencial: **el código y los commits se escriben en inglés**, los montos son
   gastos usa [`allocate`](src/domain/splitting/allocate.ts) (método del mayor resto) para que la
   suma de las partes sea exactamente el total.
 - **Paginación**: cursor-based con [`pagination.ts`](src/shared/utils/pagination.ts).
+  `?limit=&cursor=` (default 20, máximo 100) y la respuesta es
+  `{ data: [...], nextCursor: string | null }`. No hay `page` ni `total`: ningún endpoint
+  devuelve un histórico sin acotar.
+- **Fechas**: las de negocio (`expenseDate`, `incomeDate`, `settlementDate`…) son **fechas
+  civiles** `YYYY-MM-DD`, sin hora ni zona. Los timestamps de sistema (`createdAt`…) son
+  ISO-8601 en UTC.
+- **Trazabilidad**: cada respuesta lleva `X-Request-Id` (se reusa el entrante si viene), y ese
+  id aparece en los logs de Pino.
 - **Auth**: bearer token (`Authorization: Bearer <access>`); refresh con rotación.
 - **Autorización**: rutas household-scoped protegidas con `requireHouseholdMember(role?)`
   ([`authorization.middleware.ts`](src/app/middleware/authorization.middleware.ts)); valida
@@ -193,19 +232,91 @@ Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessT
 que solo se guarda su hash; en cada `/auth/refresh` se rota y, si se reutiliza uno ya revocado,
 se revocan todas las sesiones (defensa ante robo de token).
 
+### Catálogo de errores
+
+Los códigos son **estables** y forman parte del contrato: el cliente renderiza texto a partir
+del `code`, nunca del `message` (que está en inglés y es para debug). La lista canónica vive en
+[`src/shared/errors/codes.ts`](src/shared/errors/codes.ts).
+
+| Código                             | HTTP  | Cuándo                                                           |
+| ---------------------------------- | ----- | ---------------------------------------------------------------- |
+| `BAD_REQUEST`                      | `400` | Request malformado (p. ej. falta `Idempotency-Key`)              |
+| `UNAUTHORIZED`                     | `401` | Token ausente, inválido o vencido                                |
+| `INVALID_CREDENTIALS`              | `401` | Email o password incorrectos                                     |
+| `TOKEN_REUSE_DETECTED`             | `401` | Se reusó un refresh revocado → se cierran todas las sesiones     |
+| `FORBIDDEN`                        | `403` | Autenticado pero sin permiso                                     |
+| `NOT_A_MEMBER`                     | `403` | No es miembro activo del hogar                                   |
+| `INSUFFICIENT_ROLE`                | `403` | La acción requiere rol `admin`                                   |
+| `NOT_FOUND`                        | `404` | Recurso o ruta inexistente                                       |
+| `HOUSEHOLD_NOT_FOUND`              | `404` | El hogar no existe o está archivado                              |
+| `INVITATION_NOT_FOUND`             | `404` | Token de invitación inexistente                                  |
+| `CONFLICT`                         | `409` | Conflicto de negocio genérico                                    |
+| `EMAIL_ALREADY_REGISTERED`         | `409` | Ya existe una cuenta con ese email                               |
+| `LAST_ADMIN`                       | `409` | Dejaría al hogar sin administradores                             |
+| `MEMBER_HAS_OPEN_BALANCE`          | `409` | Reservado: salir del hogar con balance ≠ 0 (sin uso todavía)     |
+| `INVITATION_EXPIRED`               | `409` | Venció el TTL de 7 días                                          |
+| `INVITATION_ALREADY_RESOLVED`      | `409` | Ya fue aceptada o rechazada                                      |
+| `INVITATION_ALREADY_PENDING`       | `409` | Ya hay una invitación abierta para ese email                     |
+| `ALREADY_MEMBER`                   | `409` | Esa persona ya pertenece al hogar                                |
+| `EXPENSE_ALREADY_VOIDED`           | `409` | El gasto ya estaba anulado                                       |
+| `SETTLEMENT_ALREADY_VOIDED`        | `409` | El settlement ya estaba anulado                                  |
+| `INCOME_ALREADY_VOIDED`            | `409` | El ingreso ya estaba anulado                                     |
+| `TRANSFER_ALREADY_VOIDED`          | `409` | La transferencia ya estaba anulada                               |
+| `RECURRING_OCCURRENCE_NOT_PENDING` | `409` | Confirmar/omitir un gasto que no está `pending`                  |
+| `IDEMPOTENCY_KEY_CONFLICT`         | `409` | Misma `Idempotency-Key` con un body distinto                     |
+| `ATTACHMENT_TOO_LARGE`             | `413` | Supera `MAX_UPLOAD_BYTES` (10 MB por defecto)                    |
+| `UNSUPPORTED_MEDIA_TYPE`           | `415` | Los magic bytes no son JPEG, PNG, WEBP ni PDF                    |
+| `VALIDATION_ERROR`                 | `422` | El body/params/query no pasó el schema Zod (`details` por campo) |
+| `INVALID_PAYER`                    | `422` | El pagador no es miembro activo                                  |
+| `INVALID_PARTICIPANT`              | `422` | Algún participante no es miembro activo                          |
+| `INVALID_EXPENSE_SPLIT`            | `422` | Los splits no suman el total, o los porcentajes no dan 100       |
+| `INVALID_CATEGORY`                 | `422` | La categoría no es global ni del hogar                           |
+| `INVALID_CURRENCY`                 | `422` | No es la moneda del hogar                                        |
+| `INVALID_SETTLEMENT`               | `422` | `from == to`, monto ≤ 0, o alguien no es miembro                 |
+| `INVALID_TRANSFER`                 | `422` | `from == to`, monto ≤ 0, o alguien no es miembro                 |
+| `TOO_MANY_ATTACHMENTS`             | `422` | Ya hay 5 adjuntos en ese gasto                                   |
+| `RATE_LIMITED`                     | `429` | Demasiados intentos en `/auth/*`                                 |
+| `INTERNAL_ERROR`                   | `500` | Falla inesperada (no filtra detalles al cliente)                 |
+
+### Reglas de negocio que conviene tener presentes
+
+- **Nada se borra**: `DELETE` anula (`voided`). Los anulados no cuentan en balances ni analytics.
+- **Los balances son derivados**, nunca un campo guardado: `Σ(balances) == 0` siempre.
+- **Ingresos y transferencias no mueven balances** entre miembros; solo alimentan analytics.
+- **Un hogar = una moneda** (`defaultCurrencyCode`). No hay conversión en el MVP.
+- **Un hogar nunca queda sin admin**: no se puede quitar ni degradar al último.
+- Un **settlement** o una **transferencia** solo los registra alguien que sea parte.
+- El `PATCH` de un gasto recalcula el split de cero: `amount`, `splitType` y `participants`
+  van los tres juntos o ninguno.
+- Los gastos generados por un recurrente nacen en `pending` y hay que confirmarlos u omitirlos.
+
 ## Tests
 
 Usamos el **runner nativo de Node** (`node:test`) ejecutado con `tsx`. No depende de
 binarios nativos (Vite/Rollup), así que corre igual en cualquier máquina y en CI.
 
 ```bash
-npm test             # unit + integración (una vez)
-npm run test:watch   # modo watch
+npm test                   # unit + integración
+npm run test:unit          # solo dominio puro, sin base
+npm run test:integration   # contra Postgres
 npm run test:coverage
 ```
 
-La lógica pura (dinero, balances, simplificación de deudas) se testea sin base de datos.
-Los tests de integración corren contra un PostgreSQL desechable.
+Dos niveles, distinguidos por la extensión del archivo:
+
+| Sufijo       | Qué es                        | Necesita base |
+| ------------ | ----------------------------- | ------------- |
+| `*.test.ts`  | Unitario, dominio puro        | No            |
+| `*.itest.ts` | Integración / API (Supertest) | Sí            |
+
+La lógica financiera —`money`, `allocate`, las 4 estrategias de split, balances, simplificación
+de deudas, recurrencia, sniffing de MIME— se testea **sin base de datos y sin servidor**: son
+funciones puras. Las invariantes (`Σ(splits) == amount`, `Σ(balances) == 0`) son tests
+explícitos.
+
+[`scripts/test-env.mjs`](scripts/test-env.mjs) carga el entorno de test antes de los tests;
+entre otras cosas sube `AUTH_RATE_LIMIT_MAX`, porque solo armar los fixtures de un archivo ya
+hace decenas de llamadas reales a `/auth`.
 
 ## Flujo de ramas y entornos
 
@@ -248,8 +359,32 @@ Render, nunca en el repo.
 - **Almacenamiento**: `dev` usa `STORAGE_PROVIDER=local`; `staging`/`prod` usan `s3` — el
   filesystem de Render es efímero, así que local perdería los adjuntos en cada deploy.
 
-## Roadmap
+## Estado
 
-El backend se construye por fases (auth → hogares → invitaciones → gastos/splits →
-balances/settlements → recurrentes → adjuntos/multi-moneda → reportes/hardening →
-OpenAPI/CI/CD). Cada fase es entregable y testeable por separado.
+El **MVP está completo** según la Definition of Done de [`docs/SPECS.md`](docs/SPECS.md) §41:
+
+| Fase                                                      | Estado      |
+| --------------------------------------------------------- | ----------- |
+| Cimientos (TS, Express, Prisma, config, logging, errores) | ✅          |
+| Autenticación y usuarios                                  | ✅          |
+| Hogares, membresía e invitaciones                         | ✅          |
+| Categorías                                                | ✅          |
+| Gastos y las 4 estrategias de división                    | ✅          |
+| Balances derivados y settlements                          | ✅          |
+| Ingresos, transferencias y timeline unificado             | ✅          |
+| Gastos recurrentes + job de generación                    | ✅          |
+| Adjuntos con abstracción de storage                       | ✅          |
+| Analytics                                                 | ✅          |
+| Idempotencia, rate limiting, OpenAPI, CI/CD, Docker       | ✅          |
+| Presupuestos y metas de ahorro                            | ⬜ post-MVP |
+
+Pendientes conocidos, con su ticket implícito:
+
+- No hay endpoint para **salir de un hogar** por cuenta propia (solo un admin puede quitar a
+  alguien). El código `MEMBER_HAS_OPEN_BALANCE` ya está reservado para cuando exista.
+- **Sin envío de emails**: la invitación devuelve el `token` y el link se comparte a mano.
+  Tampoco hay verificación de email ni recuperación de contraseña.
+- **Sin multi-moneda real**: la tabla `exchange_rates` existe pero no se usa.
+- El rate limiter usa un **store en memoria**: sirve mientras la app corra en una sola
+  instancia. Escalar horizontalmente requiere un store compartido.
+- Las filas de `idempotency_keys` se retienen 24 h pero **todavía nada las purga**.
