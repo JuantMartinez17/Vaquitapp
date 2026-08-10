@@ -9,6 +9,5 @@ export const prisma = new PrismaClient({
   log: env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
-process.on('beforeExit', async () => {
-  await prisma.$disconnect();
-});
+// Disconnecting is handled by the shutdown sequence in server.ts. A
+// `beforeExit` listener would not help: it never fires on `process.exit()`.
