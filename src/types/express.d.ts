@@ -13,6 +13,17 @@ declare global {
        * se expone acá. Los controllers lo castean al tipo inferido del schema.
        */
       validatedQuery?: unknown;
+      /**
+       * Membresía del grupo de la ruta (`:groupId`), cargada por
+       * `requireGroupMember`. Permite a los controllers/services usar el rol
+       * sin volver a consultar la base.
+       */
+      membership?: {
+        id: string;
+        groupId: string;
+        userId: string;
+        role: 'admin' | 'member';
+      };
     }
   }
 }
