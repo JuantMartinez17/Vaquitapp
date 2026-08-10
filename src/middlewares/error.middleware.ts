@@ -2,12 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { AppError } from '../utils/errors.js';
 
-export const errorMiddleware = (
-  err: Error,
-  req: Request,
-  res: Response,
-  _next: NextFunction
-) => {
+export const errorMiddleware = (err: Error, req: Request, res: Response, _next: NextFunction) => {
   // Errores de validación de Zod
   if (err instanceof ZodError) {
     return res.status(422).json({
