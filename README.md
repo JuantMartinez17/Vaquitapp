@@ -13,6 +13,8 @@ gastos recurrentes, adjuntos y multi-moneda.
 - **JWT** (access + refresh con rotación) · **bcrypt** — auth
 - **Pino** — logging estructurado · **Helmet** + **CORS** — seguridad
 - **Decimal.js** — aritmética de dinero (nunca floats)
+- **Multer** (upload) + **AWS SDK v3** — adjuntos, detrás de la abstracción `FileStorage`
+  (`local` en dev, `s3` en producción)
 - **node:test** (runner nativo de Node, vía `tsx`) + **Supertest** — tests · **ESLint** + **Prettier** — calidad
 
 ## Requisitos
@@ -170,6 +172,10 @@ Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessT
 | GET    | `/households/:id/recurring-expenses/upcoming` | 🔒 Próximos vencimientos y atrasados                                           |
 | PATCH  | `/households/:id/recurring-expenses/:id`      | 🔒 Edita / activa / desactiva                                                  |
 | DELETE | `/households/:id/recurring-expenses/:id`      | 🔒 Elimina (soft delete)                                                       |
+| POST   | `/households/:id/expenses/:id/attachments`    | 🔒 Sube un comprobante (multipart, campo `file`)                               |
+| GET    | `/households/:id/expenses/:id/attachments`    | 🔒 Lista adjuntos                                                              |
+| GET    | `/.../attachments/:attId/download`            | 🔒 URL prefirmada de descarga (5 min)                                          |
+| DELETE | `/.../attachments/:attId`                     | 🔒 Elimina un adjunto                                                          |
 | GET    | `/currencies`                                 | Catálogo de monedas soportadas                                                 |
 
 **Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del

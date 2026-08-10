@@ -26,6 +26,8 @@ import { incomesRouter } from '../modules/incomes/incomes.routes.js';
 import { transfersRouter } from '../modules/transfers/transfers.routes.js';
 import { activityRouter } from '../modules/activity/activity.routes.js';
 import { recurringExpensesRouter } from '../modules/recurring-expenses/recurring-expenses.routes.js';
+import { attachmentsRouter } from '../modules/attachments/attachments.routes.js';
+import { localFilesRouter } from '../infrastructure/storage/local-files.routes.js';
 
 export const app = express();
 
@@ -77,7 +79,9 @@ apiRouter.use('/households/:householdId/incomes', incomesRouter);
 apiRouter.use('/households/:householdId/transfers', transfersRouter);
 apiRouter.use('/households/:householdId/activity', activityRouter);
 apiRouter.use('/households/:householdId/recurring-expenses', recurringExpensesRouter);
+apiRouter.use('/households/:householdId/expenses/:expenseId/attachments', attachmentsRouter);
 apiRouter.use('/currencies', currenciesRouter);
+apiRouter.use('/files/local', localFilesRouter);
 
 app.use('/api/v1', apiRouter);
 
