@@ -9,7 +9,11 @@ after(async () => {
 });
 
 describe('OpenAPI docs', () => {
-  it('serves a spec covering every mounted route without authentication', async () => {
+  // Route-by-route parity with the router is not asserted here: Express 5
+  // does not expose mount prefixes on its layers, so reconstructing them
+  // means parsing `matchers` internals. Coverage is kept by adding the
+  // RouteSpec alongside the route — see openapi.spec.ts.
+  it('serves the spec unauthenticated, with path, header and security metadata', async () => {
     const res = await request(app).get('/docs/openapi.json').expect(200);
     assert.equal(res.body.openapi, '3.0.3');
     assert.ok(res.body.paths['/households/{householdId}/expenses'].post);

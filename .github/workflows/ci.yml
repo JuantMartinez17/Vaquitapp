@@ -33,9 +33,9 @@ jobs:
       LOCAL_STORAGE_SECRET: ci-local-storage-secret-at-least-32-characters
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: lts/*
           cache: npm
@@ -51,6 +51,14 @@ jobs:
       - run: npm run typecheck
 
       - run: npx prisma migrate deploy
+
+      # Reference data (currencies, system categories) is not part of the
+      # migrations, so a freshly migrated database has an empty `currencies`
+      # table. Every integration test registers a user, and `users`
+      # references `currencies` through `preferred_currency_code` — without
+      # this, each one dies on a foreign-key violation. The seed is
+      # idempotent (upsert), so re-running it is safe.
+      - run: npx prisma db seed
 
       - run: npm test
 
