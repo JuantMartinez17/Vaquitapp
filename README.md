@@ -74,7 +74,23 @@ src/
 ├── utils/                 # errors, asyncHandler, money, pagination
 └── types/                 # augmentations de tipos (Express.Request)
 prisma/                    # schema, migraciones y seed
+docs/                      # SPECS.md — spec técnico-funcional del producto
 ```
+
+### Convenciones de código
+
+Están en **[CODESTYLE.md](CODESTYLE.md)**: idioma, commits, código depurable, comentarios y
+estructura de módulos. Casi todas las hace cumplir la máquina — `npm install` deja los hooks
+de git instalados (script `prepare`):
+
+| Hook         | Qué corre                                                             |
+| ------------ | --------------------------------------------------------------------- |
+| `pre-commit` | `lint-staged`: Prettier + ESLint (`--max-warnings 0`) sobre lo staged |
+| `commit-msg` | `commitlint`: Conventional Commits, en inglés                         |
+
+Lo esencial: **el código y los commits se escriben en inglés**, los montos son siempre
+`Decimal`, la capa `domain/` no importa Express ni Prisma (lo corta ESLint), y no se usa
+`--no-verify`.
 
 ### Convenciones de la API
 

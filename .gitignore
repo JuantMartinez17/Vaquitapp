@@ -11,5 +11,6 @@ coverage/
 .postman/
 postman/
 vaquitapp-apuntes-setup.md
-ROADMAP.md
-README.vnext.md
+# documentos de planificación locales (docs/SPECS.md sí se commitea)
+docs/ROADMAP.md
+docs/README.vnext.md
