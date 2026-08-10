@@ -89,21 +89,33 @@ prisma/                    # schema, migraciones y seed
   de las partes sea exactamente el total.
 - **Paginación**: cursor-based con [`pagination.ts`](src/utils/pagination.ts).
 - **Auth**: bearer token (`Authorization: Bearer <access>`); refresh con rotación.
+- **Autorización**: rutas group-scoped protegidas con `requireGroupMember(role?)`
+  ([`authorization.middleware.ts`](src/middlewares/authorization.middleware.ts)); valida membresía
+  activa y, opcionalmente, rol `admin`. Carga `req.membership`.
 
 ### Endpoints (v1)
 
 Base: `/api/v1`. Los marcados con 🔒 requieren `Authorization: Bearer <accessToken>`.
 
-| Método | Ruta               | Descripción                                                        |
-| ------ | ------------------ | ------------------------------------------------------------------ |
-| POST   | `/auth/register`   | Crea usuario y devuelve `{ user, accessToken, refreshToken }`      |
-| POST   | `/auth/login`      | Login con email + password                                         |
-| POST   | `/auth/refresh`    | Rota el refresh token y devuelve un nuevo par                      |
-| POST   | `/auth/logout`     | Revoca el refresh token recibido                                   |
-| POST   | `/auth/logout-all` | 🔒 Revoca todas las sesiones del usuario                           |
-| GET    | `/users/me`        | 🔒 Perfil del usuario autenticado                                  |
-| PATCH  | `/users/me`        | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode` |
-| GET    | `/currencies`      | Catálogo de monedas soportadas                                     |
+| Método | Ruta                          | Descripción                                                         |
+| ------ | ----------------------------- | ------------------------------------------------------------------- |
+| POST   | `/auth/register`              | Crea usuario y devuelve `{ user, accessToken, refreshToken }`       |
+| POST   | `/auth/login`                 | Login con email + password                                          |
+| POST   | `/auth/refresh`               | Rota el refresh token y devuelve un nuevo par                       |
+| POST   | `/auth/logout`                | Revoca el refresh token recibido                                    |
+| POST   | `/auth/logout-all`            | 🔒 Revoca todas las sesiones del usuario                            |
+| GET    | `/users/me`                   | 🔒 Perfil del usuario autenticado                                   |
+| PATCH  | `/users/me`                   | 🔒 Actualiza `displayName` / `avatarUrl` / `preferredCurrencyCode`  |
+| POST   | `/groups`                     | 🔒 Crea un grupo (el creador queda como `admin`)                    |
+| GET    | `/groups`                     | 🔒 Lista los grupos del usuario (con su rol y cantidad de miembros) |
+| GET    | `/groups/:id`                 | 🔒 Detalle del grupo (solo miembros)                                |
+| PATCH  | `/groups/:id`                 | 🔒 Actualiza el grupo (solo admin)                                  |
+| DELETE | `/groups/:id`                 | 🔒 Borra el grupo (soft delete, solo admin)                         |
+| GET    | `/groups/:id/members`         | 🔒 Lista miembros activos (solo miembros)                           |
+| POST   | `/groups/:id/members`         | 🔒 Agrega un miembro por email (solo admin)                         |
+| PATCH  | `/groups/:id/members/:userId` | 🔒 Cambia el rol de un miembro (solo admin)                         |
+| DELETE | `/groups/:id/members/:userId` | 🔒 Quita un miembro (solo admin)                                    |
+| GET    | `/currencies`                 | Catálogo de monedas soportadas                                      |
 
 **Tokens:** el **access** es un JWT corto (15m). El **refresh** es un string opaco (30d) del
 que solo se guarda su hash; en cada `/auth/refresh` se rota y, si se reutiliza uno ya revocado,

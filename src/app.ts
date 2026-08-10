@@ -8,6 +8,7 @@ import { prisma } from './config/prisma.js';
 import { errorMiddleware } from './middlewares/error.middleware.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
+import { groupsRouter } from './modules/groups/groups.routes.js';
 import { currenciesRouter } from './modules/currencies/currencies.routes.js';
 
 export const app = express();
@@ -48,6 +49,7 @@ app.get('/health/ready', async (_req, res) => {
 const apiRouter = express.Router();
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
+apiRouter.use('/groups', groupsRouter);
 apiRouter.use('/currencies', currenciesRouter);
 
 app.use('/api/v1', apiRouter);
