@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
@@ -9,8 +10,10 @@ after(async () => {
   await prisma.$disconnect();
 });
 
+// Every POST below goes through a route requiring `Idempotency-Key` (D12);
+// setting it here for all verbs is simpler than threading it per call site.
 const authed = (token: string) => (req: request.Test) =>
-  req.set('Authorization', `Bearer ${token}`);
+  req.set('Authorization', `Bearer ${token}`).set('Idempotency-Key', randomUUID());
 
 const PNG_BYTES = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

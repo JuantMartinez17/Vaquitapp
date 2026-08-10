@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authMiddleware } from '../../app/middleware/auth.middleware.js';
 import { requireHouseholdMember } from '../../app/middleware/authorization.middleware.js';
 import { validate } from '../../app/middleware/validate.middleware.js';
+import { idempotent } from '../../app/middleware/idempotency.middleware.js';
 import {
   householdIdParam,
   createSettlementSchema,
@@ -22,6 +23,7 @@ settlementsRouter.post(
   '/',
   validate(createSettlementSchema),
   requireHouseholdMember(),
+  idempotent('POST /households/:householdId/settlements'),
   settlementsController.create,
 );
 settlementsRouter.get(

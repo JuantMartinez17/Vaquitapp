@@ -85,6 +85,7 @@ model User {
   invitationsSent       Invitation[]            @relation("InvitationInviter")
   invitationsReceived   Invitation[]            @relation("InvitationInvitee")
   uploadedAttachments   ExpenseAttachment[]
+  idempotencyKeys       IdempotencyKey[]
   incomesReceived       Income[]                @relation("IncomeReceiver")
   incomesCreated        Income[]                @relation("IncomeCreator")
   transfersFrom         Transfer[]              @relation("TransferFrom")
@@ -93,6 +94,28 @@ model User {
   preferredCurrency     Currency                @relation(fields: [preferredCurrencyCode], references: [code])
 
   @@map("users")
+}
+
+// Idempotent replay for financial-mutation POSTs (D12). Replaying the same
+// (key, user) with the same request returns the original response instead
+// of creating a duplicate; replaying it with a different request is a
+// conflict. A daily job (or manual cleanup) can prune rows older than 24h —
+// see the retention note in idempotency.middleware.ts.
+model IdempotencyKey {
+  id           String   @id @default(uuid()) @db.Uuid
+  key          String   @db.VarChar(255)
+  userId       String   @map("user_id") @db.Uuid
+  endpoint     String   @db.VarChar(255)
+  requestHash  String   @map("request_hash") @db.VarChar(64)
+  statusCode   Int      @map("status_code") @db.SmallInt
+  responseBody String   @map("response_body")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([createdAt])
+  @@map("idempotency_keys")
 }
 
 model RefreshToken {

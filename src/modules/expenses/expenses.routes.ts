@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authMiddleware } from '../../app/middleware/auth.middleware.js';
 import { requireHouseholdMember } from '../../app/middleware/authorization.middleware.js';
 import { validate } from '../../app/middleware/validate.middleware.js';
+import { idempotent } from '../../app/middleware/idempotency.middleware.js';
 import {
   householdIdParam,
   createExpenseSchema,
@@ -22,6 +23,7 @@ expensesRouter.post(
   '/',
   validate(createExpenseSchema),
   requireHouseholdMember(),
+  idempotent('POST /households/:householdId/expenses'),
   expensesController.create,
 );
 expensesRouter.get(
