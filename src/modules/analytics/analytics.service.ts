@@ -1,15 +1,28 @@
 import { Decimal } from 'decimal.js';
 import { prisma } from '../../infrastructure/database/prisma.js';
-import { assertHouseholdActive } from '../households/households.service.js';
+import { NotFoundError } from '../../shared/errors/errors.js';
+import { ErrorCode } from '../../shared/errors/codes.js';
 import { formatMoney } from '../../domain/money/money.js';
 import type { DateRangeQuery, OverTimeQuery } from './analytics.schema.js';
 
-const loadHouseholdCurrency = async (householdId: string) => {
-  const household = await assertHouseholdActive(householdId);
-  const currency = await prisma.currency.findUniqueOrThrow({
-    where: { code: household.defaultCurrencyCode },
+interface HouseholdCurrency {
+  currencyCode: string;
+  decimalPlaces: number;
+}
+
+/** One query for the active household and its currency's precision. */
+const loadHouseholdCurrency = async (householdId: string): Promise<HouseholdCurrency> => {
+  const household = await prisma.household.findFirst({
+    where: { id: householdId, deletedAt: null },
+    select: { defaultCurrencyCode: true, defaultCurrency: { select: { decimalPlaces: true } } },
   });
-  return { household, currency };
+  if (!household) {
+    throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
+  }
+  return {
+    currencyCode: household.defaultCurrencyCode,
+    decimalPlaces: household.defaultCurrency.decimalPlaces,
+  };
 };
 
 const dateRangeFilter = (query: DateRangeQuery) => ({
@@ -17,8 +30,15 @@ const dateRangeFilter = (query: DateRangeQuery) => ({
   lte: new Date(query.to),
 });
 
-export const getSummary = async (householdId: string, query: DateRangeQuery) => {
-  const { household, currency } = await loadHouseholdCurrency(householdId);
+/** Largest total first; equal totals fall back to the key so the order is stable. */
+const byTotalDesc = (a: { total: Decimal; key: string }, b: { total: Decimal; key: string }) =>
+  b.total.comparedTo(a.total) || a.key.localeCompare(b.key);
+
+const computeSummary = async (
+  householdId: string,
+  currency: HouseholdCurrency,
+  query: DateRangeQuery,
+) => {
   const expenseDate = dateRangeFilter(query);
 
   const [expenseAgg, incomeAgg] = await Promise.all([
@@ -36,7 +56,7 @@ export const getSummary = async (householdId: string, query: DateRangeQuery) => 
   const totalIncome = new Decimal(incomeAgg._sum.amount ?? 0);
 
   return {
-    currencyCode: household.defaultCurrencyCode,
+    currencyCode: currency.currencyCode,
     from: query.from,
     to: query.to,
     totalSpent: formatMoney(totalSpent, currency.decimalPlaces),
@@ -45,8 +65,11 @@ export const getSummary = async (householdId: string, query: DateRangeQuery) => 
   };
 };
 
+export const getSummary = async (householdId: string, query: DateRangeQuery) =>
+  computeSummary(householdId, await loadHouseholdCurrency(householdId), query);
+
 export const getByCategory = async (householdId: string, query: DateRangeQuery) => {
-  const { currency } = await loadHouseholdCurrency(householdId);
+  const currency = await loadHouseholdCurrency(householdId);
   const expenseDate = dateRangeFilter(query);
 
   const grouped = await prisma.expense.groupBy({
@@ -56,56 +79,80 @@ export const getByCategory = async (householdId: string, query: DateRangeQuery) 
   });
 
   const categoryIds = grouped.map((g) => g.categoryId).filter((id): id is string => id !== null);
-  const categories = await prisma.category.findMany({ where: { id: { in: categoryIds } } });
+  const categories = await prisma.category.findMany({
+    where: { id: { in: categoryIds } },
+    select: { id: true, name: true },
+  });
   const nameById = new Map(categories.map((c) => [c.id, c.name]));
 
   return grouped
     .map((g) => ({
       categoryId: g.categoryId,
       categoryName: g.categoryId ? (nameById.get(g.categoryId) ?? 'Unknown') : 'Sin categoría',
-      totalSpent: formatMoney(g._sum.amount ?? 0, currency.decimalPlaces),
+      total: new Decimal(g._sum.amount ?? 0),
     }))
-    .sort((a, b) => Number(b.totalSpent) - Number(a.totalSpent));
+    .sort((a, b) =>
+      byTotalDesc(
+        { total: a.total, key: a.categoryId ?? '' },
+        { total: b.total, key: b.categoryId ?? '' },
+      ),
+    )
+    .map(({ categoryId, categoryName, total }) => ({
+      categoryId,
+      categoryName,
+      totalSpent: formatMoney(total, currency.decimalPlaces),
+    }));
 };
 
 export const getByMember = async (householdId: string, query: DateRangeQuery) => {
-  const { currency } = await loadHouseholdCurrency(householdId);
+  const currency = await loadHouseholdCurrency(householdId);
   const expenseDate = dateRangeFilter(query);
 
-  const splits = await prisma.expenseSplit.findMany({
+  // Summed by Postgres: the previous version streamed every split row (with
+  // its user) into memory just to add them up.
+  const grouped = await prisma.expenseSplit.groupBy({
+    by: ['userId'],
     where: { expense: { householdId, status: 'active', expenseDate } },
-    include: { user: true },
+    _sum: { amount: true },
   });
 
-  const totals = new Map<string, { displayName: string | null; total: Decimal }>();
-  for (const split of splits) {
-    const entry = totals.get(split.userId) ?? {
-      displayName: split.user.displayName,
-      total: new Decimal(0),
-    };
-    entry.total = entry.total.plus(split.amount);
-    totals.set(split.userId, entry);
-  }
+  const users = await prisma.user.findMany({
+    where: { id: { in: grouped.map((g) => g.userId) } },
+    select: { id: true, displayName: true },
+  });
+  const displayNameById = new Map(users.map((u) => [u.id, u.displayName]));
 
-  return [...totals.entries()]
-    .map(([userId, { displayName, total }]) => ({
+  return grouped
+    .map((g) => ({
+      userId: g.userId,
+      displayName: displayNameById.get(g.userId) ?? null,
+      total: new Decimal(g._sum.amount ?? 0),
+    }))
+    .sort((a, b) =>
+      byTotalDesc({ total: a.total, key: a.userId }, { total: b.total, key: b.userId }),
+    )
+    .map(({ userId, displayName, total }) => ({
       userId,
       displayName,
       totalSpent: formatMoney(total, currency.decimalPlaces),
-    }))
-    .sort((a, b) => Number(b.totalSpent) - Number(a.totalSpent));
+    }));
 };
 
 interface OverTimeRow {
-  bucket: Date;
-  total: Decimal | null;
+  bucket: string;
+  total: string | null;
 }
 
 export const getOverTime = async (householdId: string, query: OverTimeQuery) => {
-  const { currency } = await loadHouseholdCurrency(householdId);
+  const currency = await loadHouseholdCurrency(householdId);
 
+  // `expense_date` is a calendar `date`. DATE_TRUNC on a date silently
+  // promotes it to timestamptz in the SESSION time zone, so the bucket would
+  // depend on connection settings; truncating a plain `timestamp` and handing
+  // back text keeps the bucket a pure calendar date end to end.
   const rows = await prisma.$queryRaw<OverTimeRow[]>`
-    SELECT DATE_TRUNC(${query.granularity}, "expense_date") AS bucket, SUM("amount") AS total
+    SELECT DATE_TRUNC(${query.granularity}, "expense_date"::timestamp)::date::text AS bucket,
+           SUM("amount")::text AS total
     FROM "expenses"
     WHERE "household_id" = ${householdId}::uuid
       AND "status" = 'active'
@@ -116,12 +163,13 @@ export const getOverTime = async (householdId: string, query: OverTimeQuery) => 
   `;
 
   return rows.map((r) => ({
-    date: r.bucket.toISOString().slice(0, 10),
+    date: r.bucket,
     totalSpent: formatMoney(r.total ?? 0, currency.decimalPlaces),
   }));
 };
 
 export const getComparison = async (householdId: string, query: DateRangeQuery) => {
+  const currency = await loadHouseholdCurrency(householdId);
   const fromDate = new Date(query.from);
   const toDate = new Date(query.to);
   const periodDays = Math.round((toDate.getTime() - fromDate.getTime()) / 86_400_000) + 1;
@@ -130,8 +178,8 @@ export const getComparison = async (householdId: string, query: DateRangeQuery) 
   const previousFrom = new Date(previousTo.getTime() - (periodDays - 1) * 86_400_000);
 
   const [current, previous] = await Promise.all([
-    getSummary(householdId, query),
-    getSummary(householdId, {
+    computeSummary(householdId, currency, query),
+    computeSummary(householdId, currency, {
       from: previousFrom.toISOString().slice(0, 10),
       to: previousTo.toISOString().slice(0, 10),
     }),
