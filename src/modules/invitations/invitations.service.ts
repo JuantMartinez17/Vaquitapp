@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { prisma } from '../../infrastructure/database/prisma.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
+import { isUniqueConstraintViolation } from '../../shared/utils/prisma-errors.js';
 import { toCreatedInvitationDto, toInvitationDto } from './invitations.mapper.js';
 import type { CreatedInvitationDto, InvitationDto } from './invitations.mapper.js';
 import { toMemberDto } from '../households/households.mapper.js';
@@ -10,14 +11,19 @@ import type { MemberDto } from '../households/households.mapper.js';
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const TOKEN_BYTES = 96; // base64url-encodes to exactly 128 characters (SPECS D2).
 
-const isUniqueConstraintViolation = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
-
 export const createInvitation = async (
   householdId: string,
   invitedBy: string,
   invitedEmail: string,
 ): Promise<CreatedInvitationDto> => {
+  // Nothing else ever marks a lapsed invitation 'expired', and the partial
+  // unique index counts it as still pending. Close it out here so an expired
+  // invite doesn't block inviting the same email again.
+  await prisma.invitation.updateMany({
+    where: { householdId, invitedEmail, status: 'pending', expiresAt: { lte: new Date() } },
+    data: { status: 'expired' },
+  });
+
   const invitedUser = await prisma.user.findFirst({
     where: { email: invitedEmail, deletedAt: null },
   });
@@ -53,7 +59,7 @@ export const listInvitations = async (householdId: string): Promise<InvitationDt
     where: { householdId },
     orderBy: { createdAt: 'desc' },
   });
-  return invitations.map(toInvitationDto);
+  return invitations.map((invitation) => toInvitationDto(invitation));
 };
 
 export const listMyInvitations = async (email: string): Promise<InvitationDto[]> => {
@@ -61,28 +67,33 @@ export const listMyInvitations = async (email: string): Promise<InvitationDto[]>
     where: { invitedEmail: email, status: 'pending', expiresAt: { gt: new Date() } },
     orderBy: { createdAt: 'desc' },
   });
-  return invitations.map(toInvitationDto);
+  return invitations.map((invitation) => toInvitationDto(invitation));
 };
 
 export const revokeInvitation = async (
   householdId: string,
   invitationId: string,
 ): Promise<void> => {
-  const invitation = await prisma.invitation.findFirst({
-    where: { id: invitationId, householdId },
+  // Not a financial fact, so there's no history requirement — revoking an
+  // unresolved invite just removes it, freeing the email up for a new one.
+  // The status is part of the delete itself: checking first and deleting after
+  // would let a concurrent accept resolve the invitation in between, and the
+  // revoke would then erase an accepted one.
+  const revoked = await prisma.invitation.deleteMany({
+    where: { id: invitationId, householdId, status: { in: ['pending', 'expired'] } },
   });
-  if (!invitation) {
+  if (revoked.count === 1) {
+    return;
+  }
+
+  const exists = await prisma.invitation.count({ where: { id: invitationId, householdId } });
+  if (exists === 0) {
     throw new NotFoundError('Invitation not found', ErrorCode.INVITATION_NOT_FOUND);
   }
-  if (invitation.status !== 'pending') {
-    throw new ConflictError(
-      'Only a pending invitation can be revoked',
-      ErrorCode.INVITATION_ALREADY_RESOLVED,
-    );
-  }
-  // Not a financial fact, so there's no history requirement — revoking a
-  // pending invite just removes it, freeing the email up for a new one.
-  await prisma.invitation.delete({ where: { id: invitationId } });
+  throw new ConflictError(
+    'Only an unresolved invitation can be revoked',
+    ErrorCode.INVITATION_ALREADY_RESOLVED,
+  );
 };
 
 const loadResolvableInvitation = async (token: string, email: string) => {
@@ -93,7 +104,12 @@ const loadResolvableInvitation = async (token: string, email: string) => {
   if (invitation.invitedEmail.toLowerCase() !== email.toLowerCase()) {
     throw new ForbiddenError('This invitation was not sent to you');
   }
-  if (invitation.expiresAt < new Date()) {
+  // Checked before the resolved status: a row closed out as 'expired' (see
+  // createInvitation) must keep reporting why, not "already resolved".
+  const lapsed =
+    invitation.status === 'expired' ||
+    (invitation.status === 'pending' && invitation.expiresAt < new Date());
+  if (lapsed) {
     throw new ConflictError('This invitation has expired', ErrorCode.INVITATION_EXPIRED);
   }
   if (invitation.status !== 'pending') {

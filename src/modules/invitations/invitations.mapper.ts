@@ -10,11 +10,19 @@ export interface InvitationDto {
   respondedAt: string | null;
 }
 
-export const toInvitationDto = (invitation: Invitation): InvitationDto => ({
+/**
+ * A pending invitation past its deadline is reported as 'expired' even if no
+ * write has closed it out yet (that only happens when the same email is invited
+ * again), so lists never show a dead invitation as actionable.
+ */
+const effectiveStatus = (invitation: Invitation, now: Date): Invitation['status'] =>
+  invitation.status === 'pending' && invitation.expiresAt <= now ? 'expired' : invitation.status;
+
+export const toInvitationDto = (invitation: Invitation, now = new Date()): InvitationDto => ({
   id: invitation.id,
   householdId: invitation.householdId,
   invitedEmail: invitation.invitedEmail,
-  status: invitation.status,
+  status: effectiveStatus(invitation, now),
   expiresAt: invitation.expiresAt.toISOString(),
   createdAt: invitation.createdAt.toISOString(),
   respondedAt: invitation.respondedAt?.toISOString() ?? null,
