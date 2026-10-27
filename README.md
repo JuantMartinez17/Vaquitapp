@@ -322,11 +322,15 @@ hace decenas de llamadas reales a `/auth`.
 
 Modelo por entorno:
 
-| Rama                | Entorno              | Deploy                  |
-| ------------------- | -------------------- | ----------------------- |
-| `develop` (default) | desarrollo / testing | auto                    |
-| `staging`           | pre-producción / QA  | auto                    |
-| `main`              | **producción**       | manual (con aprobación) |
+| Rama                | Rol                 | ¿Desplegada?                      |
+| ------------------- | ------------------- | --------------------------------- |
+| `develop` (default) | integración         | No — corre local y en CI          |
+| `staging`           | pre-producción / QA | No — corre local y en CI          |
+| `main`              | **producción**      | **Sí** — único entorno desplegado |
+
+Solo `main` está en el aire: es un proyecto personal y un entorno desplegado alcanza. El CI
+cubre lo que daría un staging —migraciones, seed y los 119 tests contra un Postgres
+desechable— en cada PR a las tres ramas.
 
 - Trabajo en ramas cortas: `feature/*`, `fix/*`, `chore/*` desde `develop`.
 - Promoción vía PR: `feature/*` → `develop` → `staging` → `main`.
@@ -335,29 +339,56 @@ Modelo por entorno:
 - Mensajes de commit en formato **Conventional Commits** (`feat:`, `fix:`, `chore:`…).
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) corre en cada push/PR a esas tres
-ramas: `install → format:check → lint → typecheck → migrate deploy → test → build`, contra un
+ramas: `install → format:check → lint → typecheck → migrate deploy → seed → test → build`, contra un
 Postgres desechable (servicio de GitHub Actions).
 
-## Deploy (Render)
+## Deploy
 
-[`render.yaml`](render.yaml) es un Blueprint: un Web Service + un PostgreSQL gestionado por
-entorno (`dev`←develop, `staging`←staging, `prod`←main), construidos desde el
-[`Dockerfile`](Dockerfile) multi-stage (build compila con todas las dependencias; runtime
-solo lleva `dist/`, `node_modules` de producción, y `prisma/` + la CLI de Prisma para el
-Pre-Deploy). Revisar el Blueprint antes de aplicarlo — plan/región son el mínimo pago, y los
-secrets marcados `sync: false` (CORS, credenciales S3) se completan a mano en el dashboard de
-Render, nunca en el repo.
+Un solo entorno desplegado —**producción**, desde `main`— sobre servicios gratuitos.
+`develop` y `staging` viven en tu máquina y en el CI, que ya corre migraciones, seed y los
+119 tests contra un Postgres desechable en cada PR.
 
-- **Build / Pre-Deploy / Start**: definidos por el Dockerfile — generar cliente y compilar,
-  `npx prisma migrate deploy` antes de activar la versión, y `node dist/server.js`.
-- **Health Check Path**: `/health/ready`.
-- **Auto-Deploy**: `dev`/`staging` despliegan solo tras CI en verde ("After CI Checks Pass");
-  `prod` nunca despliega automáticamente, se dispara a mano desde el dashboard.
-- **Backups**: gestionados por Render en producción, retención 7 días. Procedimiento de
-  restauración y verificación, ejercitado localmente, en
-  [`docs/runbooks/restore-drill.md`](docs/runbooks/restore-drill.md) (D18).
-- **Almacenamiento**: `dev` usa `STORAGE_PROVIDER=local`; `staging`/`prod` usan `s3` — el
-  filesystem de Render es efímero, así que local perdería los adjuntos en cada deploy.
+| Pieza    | Servicio                             | Por qué                                                            |
+| -------- | ------------------------------------ | ------------------------------------------------------------------ |
+| API      | Render Free, Docker, rama `main`     | 750 h/mes por workspace; se suspende tras 15 min sin tráfico       |
+| Base     | [Neon](https://neon.com) Free        | El Postgres Free de Render **expira a los 30 días**; el de Neon no |
+| Adjuntos | [Cloudflare R2](https://r2.dev) Free | 10 GB y sin cargos de egress; S3-compatible, sin cambios de código |
+
+[`render.yaml`](render.yaml) declara ese único servicio. La base y el almacenamiento son
+externos, así que sus credenciales se cargan a mano en el dashboard (`sync: false`) y nunca
+se commitean: `DATABASE_URL`, `CORS_ORIGINS`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`
+y `S3_SECRET_ACCESS_KEY`.
+
+### Migraciones
+
+El pre-deploy command de Render es **solo para planes pagos**, así que las migraciones se
+corren a mano, contra la connection string **directa** de Neon (la que _no_ lleva `-pooler`;
+Prisma puede fallar a través de PgBouncer):
+
+```bash
+DATABASE_URL="<neon-direct-url>" npx prisma migrate deploy
+DATABASE_URL="<neon-direct-url>" npx prisma db seed   # solo la primera vez
+```
+
+Sin el seed, `currencies` queda vacía y **todo registro de usuario falla** por la foreign key
+de `preferred_currency_code`.
+
+Las migraciones tienen que ser **compatibles hacia atrás**: entre que se aplican y sube la
+versión nueva, el código viejo sigue sirviendo. Un cambio destructivo va en dos deploys.
+
+### Detalles operativos
+
+- **Health Check Path**: `/health/ready` (hace `SELECT 1`). Si algún día pasás a un plan
+  always-on, conviene apuntarlo a `/health`, que no toca la base: el health check periódico
+  mantendría a Neon despierto y se comería sus 100 CU-horas mensuales gratis.
+- **Scheduler**: `ENABLE_SCHEDULER=true` funciona aunque el servicio duerma —
+  [`startInterval`](src/infrastructure/scheduler/scheduler.ts) ejecuta el job al arrancar, y
+  `generateDueOccurrences` es idempotente y recupera los días perdidos. Las ocurrencias se
+  generan en cada wake-up en vez de por reloj.
+- **Backups**: los del plan de Neon. El procedimiento de restauración, ejercitado localmente,
+  está en [`docs/runbooks/restore-drill.md`](docs/runbooks/restore-drill.md).
+- **Primer request tras inactividad**: ~1 minuto, por el spin-down del plan Free. Pasar a
+  Starter es un dropdown en el dashboard, sin migración ni downtime.
 
 ## Estado
 
@@ -377,6 +408,10 @@ El **MVP está completo** según la Definition of Done de [`docs/SPECS.md`](docs
 | Analytics                                                 | ✅          |
 | Idempotencia, rate limiting, OpenAPI, CI/CD, Docker       | ✅          |
 | Presupuestos y metas de ahorro                            | ⬜ post-MVP |
+| **Deploy a producción**                                   | 🚧 en curso |
+
+El código está listo para desplegarse; falta la infraestructura (cuentas de Neon, R2 y
+Render). Ver **Deploy** más arriba.
 
 Pendientes conocidos, con su ticket implícito:
 
@@ -388,3 +423,6 @@ Pendientes conocidos, con su ticket implícito:
 - El rate limiter usa un **store en memoria**: sirve mientras la app corra en una sola
   instancia. Escalar horizontalmente requiere un store compartido.
 - Las filas de `idempotency_keys` se retienen 24 h pero **todavía nada las purga**.
+- **Sin monitoreo de errores**: no hay Sentry ni equivalente integrado — no existe la
+  dependencia, ni código que la use, ni validación en `config.ts`. Hoy un `500` en
+  producción solo deja rastro en los logs de Pino.

@@ -41,6 +41,10 @@ const envSchema = z.object({
   // a file is served, instead of the path alone being enough.
   LOCAL_STORAGE_SECRET: z.string().min(32).optional(),
   LOCAL_STORAGE_DIR: z.string().default('./uploads'),
+  // Required whenever STORAGE_PROVIDER=s3 (see requiredForProvider below).
+  // S3FileStorage passes this straight to the SDK, and an absent endpoint
+  // silently means "AWS" — so an S3-compatible provider (R2, Supabase,
+  // MinIO) would fail on the first upload at runtime instead of at boot.
   S3_ENDPOINT: z.string().url().optional(),
   S3_REGION: z.string().optional(),
   S3_BUCKET: z.string().optional(),
@@ -61,7 +65,7 @@ if (!parsed.success) {
 
 const requiredForProvider: Record<'local' | 's3', string[]> = {
   local: ['LOCAL_STORAGE_SECRET'],
-  s3: ['S3_REGION', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+  s3: ['S3_ENDPOINT', 'S3_REGION', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
 };
 
 const missing = requiredForProvider[parsed.data.STORAGE_PROVIDER].filter(

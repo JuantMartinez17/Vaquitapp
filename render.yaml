@@ -1,123 +1,54 @@
-# Render Blueprint — one Web Service + managed Postgres per environment,
-# matching README.md § Flujo de ramas y entornos / § Deploy (Render).
+# Render Blueprint — un solo Web Service, en el plan Free.
 #
-# Review before applying: plan tiers are the cheapest paid tier ("starter");
-# region and any real S3 bucket/credentials are yours to fill in. Blueprints
-# only apply on first sync — editing this file afterwards does not change
-# already-created services, only what a fresh `render blueprint launch` would.
+# La base (Neon) y el almacenamiento (Cloudflare R2) son externos y NO se
+# declaran acá: sus credenciales se cargan a mano en el dashboard.
 #
-# Secrets left unset here (`sync: false`) must be entered once in the Render
-# dashboard per environment; they are never generated or committed.
+# Por qué no hay `databases:`  — el Postgres Free de Render expira a los 30
+# días y borra los datos 14 días después. El plan Free de Neon no expira.
+# Por qué no hay `preDeployCommand` — Render solo lo ofrece en planes pagos,
+# así que `prisma migrate deploy` se corre a mano contra la URL directa de
+# Neon (ver README § Deploy).
+#
+# Los secrets marcados `sync: false` se cargan una vez en el dashboard; nunca
+# se commitean.
 
 services:
   - type: web
-    name: vaquitapp-api-dev
+    name: vaquitapp-api
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
-    region: oregon
-    branch: develop
-    healthCheckPath: /health/ready
-    autoDeployTrigger: checksPass
-    preDeployCommand: npx prisma migrate deploy
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: vaquitapp-db-dev
-          property: connectionString
-      - key: JWT_ACCESS_SECRET
-        generateValue: true
-      - key: JWT_REFRESH_SECRET
-        generateValue: true
-      - key: CORS_ORIGINS
-        sync: false
-      - key: ENABLE_SCHEDULER
-        value: 'true'
-      - key: STORAGE_PROVIDER
-        value: local
-      - key: LOCAL_STORAGE_SECRET
-        generateValue: true
-      - key: AUTH_RATE_LIMIT_MAX
-        value: '20'
-      - key: AUTH_RATE_LIMIT_WINDOW_MS
-        value: '900000'
-
-  - type: web
-    name: vaquitapp-api-staging
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: starter
-    region: oregon
-    branch: staging
-    healthCheckPath: /health/ready
-    autoDeployTrigger: checksPass
-    preDeployCommand: npx prisma migrate deploy
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: vaquitapp-db-staging
-          property: connectionString
-      - key: JWT_ACCESS_SECRET
-        generateValue: true
-      - key: JWT_REFRESH_SECRET
-        generateValue: true
-      - key: CORS_ORIGINS
-        sync: false
-      - key: ENABLE_SCHEDULER
-        value: 'true'
-      # Render's filesystem is ephemeral: local storage would lose every
-      # attachment on the next deploy or restart. S3 credentials are set
-      # manually in the dashboard (sync: false), not known at blueprint time.
-      - key: STORAGE_PROVIDER
-        value: s3
-      - key: S3_REGION
-        sync: false
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_ACCESS_KEY_ID
-        sync: false
-      - key: S3_SECRET_ACCESS_KEY
-        sync: false
-      - key: AUTH_RATE_LIMIT_MAX
-        value: '20'
-      - key: AUTH_RATE_LIMIT_WINDOW_MS
-        value: '900000'
-
-  - type: web
-    name: vaquitapp-api-prod
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: starter
+    plan: free
     region: oregon
     branch: main
     healthCheckPath: /health/ready
-    # "manual (con aprobación)" per README: never deploys automatically,
-    # even after CI passes — someone triggers it from the dashboard.
-    autoDeployTrigger: off
-    preDeployCommand: npx prisma migrate deploy
     envVars:
       - key: NODE_ENV
         value: production
+      # Neon: usar la connection string POOLED (host con `-pooler`).
+      # La directa queda para las migraciones.
       - key: DATABASE_URL
-        fromDatabase:
-          name: vaquitapp-db-prod
-          property: connectionString
+        sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
       - key: CORS_ORIGINS
         sync: false
+      # Sirve aunque el servicio duerma: startInterval corre el job al
+      # arrancar, generateDueOccurrences es idempotente y dueDates() recupera
+      # los días perdidos, así que las ocurrencias se generan en cada wake-up.
       - key: ENABLE_SCHEDULER
         value: 'true'
+      # El filesystem de Render es efímero y un disco persistente rompería
+      # los deploys sin downtime, así que los adjuntos van a R2.
       - key: STORAGE_PROVIDER
         value: s3
-      - key: S3_REGION
+      # Obligatorio: sin endpoint el SDK asume AWS y R2 nunca recibe nada.
+      # Formato: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      - key: S3_ENDPOINT
         sync: false
+      - key: S3_REGION
+        value: auto
       - key: S3_BUCKET
         sync: false
       - key: S3_ACCESS_KEY_ID
@@ -128,22 +59,3 @@ services:
         value: '20'
       - key: AUTH_RATE_LIMIT_WINDOW_MS
         value: '900000'
-
-databases:
-  - name: vaquitapp-db-dev
-    plan: starter
-    region: oregon
-    databaseName: vaquitapp
-    user: vaquitapp
-
-  - name: vaquitapp-db-staging
-    plan: starter
-    region: oregon
-    databaseName: vaquitapp
-    user: vaquitapp
-
-  - name: vaquitapp-db-prod
-    plan: starter
-    region: oregon
-    databaseName: vaquitapp
-    user: vaquitapp
