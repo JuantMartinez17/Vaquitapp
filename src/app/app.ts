@@ -12,6 +12,7 @@ import {
 } from '../infrastructure/logging/request-logging.js';
 import { createHealthRouter } from '../infrastructure/health/health.routes.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { apiRateLimiter } from './middleware/rate-limit.middleware.js';
 import { authRouter } from '../modules/auth/auth.routes.js';
 import { usersRouter } from '../modules/users/users.routes.js';
 import { householdsRouter } from '../modules/households/households.routes.js';
@@ -66,6 +67,7 @@ app.use('/docs', openApiRouter);
 
 // API v1 routes
 const apiRouter = express.Router();
+apiRouter.use(apiRateLimiter);
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
 apiRouter.use('/households', householdsRouter);
