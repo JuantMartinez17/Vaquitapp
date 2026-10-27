@@ -61,6 +61,10 @@ export const ErrorCode = {
   // Cross-cutting
   IDEMPOTENCY_KEY_CONFLICT: 'IDEMPOTENCY_KEY_CONFLICT',
   RATE_LIMITED: 'RATE_LIMITED',
+
+  // Added by the backend hardening pass (append-only block).
+  USERNAME_TAKEN: 'USERNAME_TAKEN',
+  IDEMPOTENCY_KEY_IN_PROGRESS: 'IDEMPOTENCY_KEY_IN_PROGRESS',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

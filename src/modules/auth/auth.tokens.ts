@@ -9,31 +9,36 @@ export interface AccessTokenPayload {
   email: string;
 }
 
-/** Firma un access token (JWT de corta vida). */
+// Pinned on both sides: jsonwebtoken derives the accepted algorithms from the
+// key type when none are given, and a token must never choose its own.
+const JWT_ALGORITHM = 'HS256';
+
+/** Signs a short-lived access token (JWT). */
 export const signAccessToken = (payload: AccessTokenPayload): string =>
   jwt.sign(payload, env.JWT_ACCESS_SECRET, {
+    algorithm: JWT_ALGORITHM,
     expiresIn: env.JWT_ACCESS_TTL as SignOptions['expiresIn'],
   });
 
-/** Verifica un access token y devuelve el payload tipado. Lanza si es inválido. */
+/** Verifies an access token and returns the typed payload. Throws if invalid. */
 export const verifyAccessToken = (token: string): AccessTokenPayload => {
-  const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET);
+  const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET, { algorithms: [JWT_ALGORITHM] });
   if (typeof decoded === 'string' || !decoded.sub || typeof decoded.email !== 'string') {
-    throw new Error('Access token inválido');
+    throw new Error('Invalid access token payload');
   }
   return { sub: String(decoded.sub), email: decoded.email };
 };
 
 /**
- * Genera un refresh token OPACO (no JWT): string aleatorio.
- * En la base solo guardamos su hash, nunca el token en claro.
+ * Generates an OPAQUE refresh token (not a JWT): a random string.
+ * Only its hash is stored in the database, never the token itself.
  */
 export const generateRefreshToken = (): string => randomBytes(32).toString('base64url');
 
-/** Hash SHA-256 (hex) del token. Lo que se persiste en RefreshToken.tokenHash. */
+/** SHA-256 hash (hex) of the token: what gets persisted in RefreshToken.tokenHash. */
 export const hashToken = (token: string): string =>
   createHash('sha256').update(token).digest('hex');
 
-/** Fecha de expiración de un refresh token, según JWT_REFRESH_TTL. */
+/** Expiry date of a refresh token, per JWT_REFRESH_TTL. */
 export const refreshTokenExpiry = (from: Date = new Date()): Date =>
   new Date(from.getTime() + parseDurationMs(env.JWT_REFRESH_TTL));
