@@ -40,7 +40,7 @@ app.set('trust proxy', 1);
 
 // Global middlewares
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGINS.split(',') }));
+app.use(cors({ origin: env.CORS_ORIGINS }));
 app.use(express.json({ limit: '1mb' }));
 app.use(
   pinoHttp({
