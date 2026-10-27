@@ -31,6 +31,12 @@ transfersRouter.get(
   requireHouseholdMember(),
   transfersController.list,
 );
+transfersRouter.get(
+  '/:transferId',
+  validate(transferIdParam),
+  requireHouseholdMember(),
+  transfersController.getOne,
+);
 transfersRouter.delete(
   '/:transferId',
   validate(transferIdParam),
