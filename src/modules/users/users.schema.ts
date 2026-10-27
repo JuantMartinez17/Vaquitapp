@@ -14,7 +14,10 @@ export const updateUserSchema = {
     .object({
       displayName: textSchema(100),
       avatarUrl,
-      preferredCurrencyCode: z.string().length(3).toUpperCase(),
+      preferredCurrencyCode: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .toUpperCase(),
     })
     .partial()
     .strict(),

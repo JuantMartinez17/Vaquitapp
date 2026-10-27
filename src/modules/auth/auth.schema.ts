@@ -18,7 +18,11 @@ export const registerSchema = {
           message: `Password must be at most ${BCRYPT_MAX_PASSWORD_BYTES} bytes`,
         }),
       displayName: textSchema(100).optional(),
-      preferredCurrencyCode: z.string().length(3).toUpperCase().optional(),
+      preferredCurrencyCode: z
+        .string()
+        .regex(/^[A-Za-z]{3}$/)
+        .toUpperCase()
+        .optional(),
     })
     .strict(),
 };

@@ -292,6 +292,34 @@ describe('input validation: invitations, categories and users', () => {
     assert.equal(res.status, 422);
   });
 
+  it('rejects an invitation token that is not base64url, such as one with a NUL byte', async () => {
+    const user = await registerTestUser(app);
+    for (const token of ['abc%00def', 'has%20space', 'semi%3Bcolon']) {
+      const res = await request(app)
+        .post(`/api/v1/invitations/${token}/accept`)
+        .set('Authorization', `Bearer ${user.accessToken}`);
+      assert.equal(res.status, 422, token);
+    }
+  });
+
+  it('rejects a currency code with a NUL byte or digits on register and profile update', async () => {
+    const user = await registerTestUser(app);
+    for (const preferredCurrencyCode of ['A\u0000B', 'A1B', 'a b']) {
+      const profile = await patch(user, '/api/v1/users/me', { preferredCurrencyCode });
+      assert.equal(profile.status, 422, JSON.stringify(preferredCurrencyCode));
+
+      const registered = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          email: `${randomUUID()}@example.test`,
+          username: `u_${randomUUID().replace(/-/g, '')}`,
+          password: 'Sup3rSecret!',
+          preferredCurrencyCode,
+        });
+      assert.equal(registered.status, 422, JSON.stringify(preferredCurrencyCode));
+    }
+  });
+
   it('rejects NUL characters in category and profile text', async () => {
     const { admin, householdId } = await setupHousehold();
     const category = await post(admin, base(householdId, 'categories'), { name: 'bad\u0000name' });
