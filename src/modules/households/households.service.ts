@@ -2,7 +2,7 @@ import { prisma } from '../../infrastructure/database/prisma.js';
 import { BadRequestError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
 import type { Household, MemberRole } from '../../generated/prisma/client.js';
-import { toHouseholdDto, toMemberDto } from './households.mapper.js';
+import { MEMBER_INCLUDE, toHouseholdDto, toMemberDto } from './households.mapper.js';
 import type { HouseholdDto, MemberDto } from './households.mapper.js';
 import type { CreateHouseholdDto, UpdateHouseholdDto } from './households.schema.js';
 
@@ -116,7 +116,7 @@ export const softDeleteHousehold = async (householdId: string): Promise<void> =>
 export const listMembers = async (householdId: string): Promise<MemberDto[]> => {
   const members = await prisma.householdMember.findMany({
     where: { householdId, leftAt: null },
-    include: { user: true },
+    include: MEMBER_INCLUDE,
     orderBy: { joinedAt: 'asc' },
   });
   return members.map(toMemberDto);
@@ -155,7 +155,7 @@ export const changeMemberRole = async (
 ): Promise<MemberDto> => {
   const member = await prisma.householdMember.findFirst({
     where: { householdId, userId: targetUserId, leftAt: null },
-    include: { user: true },
+    include: MEMBER_INCLUDE,
   });
   if (!member) {
     throw new NotFoundError('The user is not a member of the household', ErrorCode.NOT_A_MEMBER);
@@ -180,7 +180,7 @@ export const changeMemberRole = async (
   const updated = await prisma.householdMember.update({
     where: { id: member.id },
     data: { role },
-    include: { user: true },
+    include: MEMBER_INCLUDE,
   });
   return toMemberDto(updated);
 };

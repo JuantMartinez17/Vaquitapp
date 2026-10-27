@@ -1,11 +1,13 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { formatMoney } from '../../domain/money/money.js';
 
+// Narrow `select`s on purpose: a bare `true` would load whole User rows
+// (password hash included) just to read a display name.
 export const RECURRING_EXPENSE_INCLUDE = {
-  payer: true,
-  category: true,
-  currency: true,
-  splits: { include: { user: true } },
+  payer: { select: { id: true, displayName: true } },
+  category: { select: { id: true, name: true } },
+  currency: { select: { decimalPlaces: true } },
+  splits: { include: { user: { select: { displayName: true } } } },
 } satisfies Prisma.RecurringExpenseInclude;
 
 export type RecurringExpenseWithRelations = Prisma.RecurringExpenseGetPayload<{
