@@ -9,10 +9,10 @@ import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { parsePagination, buildPage } from '../../shared/utils/pagination.js';
 import type { Page } from '../../shared/utils/pagination.js';
-import type { PaginationQuery } from '../../shared/utils/pagination.js';
 import { SETTLEMENT_INCLUDE, toSettlementDto } from './settlements.mapper.js';
 import type { SettlementDto } from './settlements.mapper.js';
-import type { CreateSettlementDto } from './settlements.schema.js';
+import type { CreateSettlementDto, ListSettlementsQuery } from './settlements.schema.js';
+import type { MemberRole } from '../../generated/prisma/client.js';
 import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
 
 export const createSettlement = async (
@@ -64,13 +64,30 @@ export const createSettlement = async (
   return toSettlementDto(settlement);
 };
 
+export const getSettlement = async (
+  householdId: string,
+  settlementId: string,
+): Promise<SettlementDto> => {
+  const settlement = await prisma.settlement.findFirst({
+    where: { id: settlementId, householdId },
+    include: SETTLEMENT_INCLUDE,
+  });
+  if (!settlement) {
+    throw new NotFoundError('Settlement not found');
+  }
+  return toSettlementDto(settlement);
+};
+
 export const listSettlements = async (
   householdId: string,
-  query: PaginationQuery,
+  query: ListSettlementsQuery,
 ): Promise<Page<SettlementDto>> => {
   const { take, cursor } = parsePagination(query);
   const rows = await prisma.settlement.findMany({
-    where: { householdId },
+    where: {
+      householdId,
+      ...(query.includeVoided === 'true' ? {} : { status: { not: 'voided' } }),
+    },
     include: SETTLEMENT_INCLUDE,
     orderBy: [{ settlementDate: 'desc' }, { id: 'desc' }],
     take: take + 1,
@@ -80,18 +97,32 @@ export const listSettlements = async (
   return { data: page.data.map(toSettlementDto), nextCursor: page.nextCursor };
 };
 
-export const voidSettlement = async (householdId: string, settlementId: string): Promise<void> => {
+export const voidSettlement = async (
+  actor: { userId: string; role: MemberRole },
+  householdId: string,
+  settlementId: string,
+): Promise<void> => {
   const settlement = await prisma.settlement.findFirst({
     where: { id: settlementId, householdId },
   });
   if (!settlement) {
     throw new NotFoundError('Settlement not found');
   }
-  if (settlement.status === 'voided') {
-    throw new ConflictError('Settlement was already voided', ErrorCode.SETTLEMENT_ALREADY_VOIDED);
+  // Same rule as recording one (see createSettlement), with admins added as a
+  // safety valve: otherwise a settlement entered by mistake could be stuck if
+  // its parties are unavailable or have left.
+  const isParty = actor.userId === settlement.fromUser || actor.userId === settlement.toUser;
+  if (!isParty && actor.role !== 'admin') {
+    throw new ForbiddenError('Only a party to the settlement or a household admin can void it');
   }
-  await prisma.settlement.update({
-    where: { id: settlementId },
+
+  // Conditional on the status the read above saw, so of two racing voids
+  // exactly one matches and the other reports the same conflict as a retry.
+  const voided = await prisma.settlement.updateMany({
+    where: { id: settlementId, householdId, status: { not: 'voided' } },
     data: { status: 'voided', voidedAt: new Date() },
   });
+  if (voided.count === 0) {
+    throw new ConflictError('Settlement was already voided', ErrorCode.SETTLEMENT_ALREADY_VOIDED);
+  }
 };

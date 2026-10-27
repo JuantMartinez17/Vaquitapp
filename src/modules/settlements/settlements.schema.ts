@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { idCursorPaginationQuerySchema } from '../../shared/utils/pagination.js';
 import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { includeVoidedSchema } from '../../shared/validation/include-voided.schema.js';
 import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
 import { textSchema } from '../../shared/validation/text.schema.js';
 
@@ -32,6 +33,9 @@ export const createSettlementSchema = {
     .strict(),
 };
 
-export const listSettlementsQuerySchema = idCursorPaginationQuerySchema;
+export const listSettlementsQuerySchema = idCursorPaginationQuerySchema.extend({
+  includeVoided: includeVoidedSchema,
+});
 
 export type CreateSettlementDto = z.infer<typeof createSettlementSchema.body>;
+export type ListSettlementsQuery = z.infer<typeof listSettlementsQuerySchema>;

@@ -32,6 +32,12 @@ settlementsRouter.get(
   requireHouseholdMember(),
   settlementsController.list,
 );
+settlementsRouter.get(
+  '/:settlementId',
+  validate(settlementIdParam),
+  requireHouseholdMember(),
+  settlementsController.getOne,
+);
 settlementsRouter.delete(
   '/:settlementId',
   validate(settlementIdParam),
