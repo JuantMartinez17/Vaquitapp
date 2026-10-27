@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { idCursorPaginationQuerySchema } from '../../shared/utils/pagination.js';
 import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { includeVoidedSchema } from '../../shared/validation/include-voided.schema.js';
 import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
 import { textSchema } from '../../shared/validation/text.schema.js';
 
@@ -103,6 +104,8 @@ export const listExpensesQuerySchema = idCursorPaginationQuerySchema.extend({
   paidBy: z.string().uuid().optional(),
   participantId: z.string().uuid().optional(),
   status: z.enum(['active', 'voided', 'pending']).optional(),
+  // Ignored when `status` is given: that already names the exact set wanted.
+  includeVoided: includeVoidedSchema,
 });
 
 export type CreateExpenseDto = z.infer<typeof createExpenseSchema.body>;
