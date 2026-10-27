@@ -8,11 +8,12 @@ import {
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { parsePagination, buildPage } from '../../shared/utils/pagination.js';
-import type { Page, PaginationQuery } from '../../shared/utils/pagination.js';
+import type { Page } from '../../shared/utils/pagination.js';
 import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
 import { TRANSFER_INCLUDE, toTransferDto } from './transfers.mapper.js';
 import type { TransferDto } from './transfers.mapper.js';
-import type { CreateTransferDto } from './transfers.schema.js';
+import type { CreateTransferDto, ListTransfersQuery } from './transfers.schema.js';
+import type { MemberRole } from '../../generated/prisma/client.js';
 
 export const createTransfer = async (
   requestingUserId: string,
@@ -58,13 +59,27 @@ export const createTransfer = async (
   return toTransferDto(transfer);
 };
 
+export const getTransfer = async (
+  householdId: string,
+  transferId: string,
+): Promise<TransferDto> => {
+  const transfer = await prisma.transfer.findFirst({
+    where: { id: transferId, householdId },
+    include: TRANSFER_INCLUDE,
+  });
+  if (!transfer) {
+    throw new NotFoundError('Transfer not found');
+  }
+  return toTransferDto(transfer);
+};
+
 export const listTransfers = async (
   householdId: string,
-  query: PaginationQuery,
+  query: ListTransfersQuery,
 ): Promise<Page<TransferDto>> => {
   const { take, cursor } = parsePagination(query);
   const rows = await prisma.transfer.findMany({
-    where: { householdId },
+    where: { householdId, ...(query.includeVoided === 'true' ? {} : { voidedAt: null }) },
     include: TRANSFER_INCLUDE,
     orderBy: [{ transferDate: 'desc' }, { id: 'desc' }],
     take: take + 1,
@@ -74,13 +89,30 @@ export const listTransfers = async (
   return { data: page.data.map(toTransferDto), nextCursor: page.nextCursor };
 };
 
-export const voidTransfer = async (householdId: string, transferId: string): Promise<void> => {
+export const voidTransfer = async (
+  actor: { userId: string; role: MemberRole },
+  householdId: string,
+  transferId: string,
+): Promise<void> => {
   const transfer = await prisma.transfer.findFirst({ where: { id: transferId, householdId } });
   if (!transfer) {
     throw new NotFoundError('Transfer not found');
   }
-  if (transfer.voidedAt) {
+  // Same rule as recording one (see createTransfer), with admins added as a
+  // safety valve: otherwise a transfer entered by mistake could be stuck if
+  // its parties are unavailable or have left.
+  const isParty = actor.userId === transfer.fromUser || actor.userId === transfer.toUser;
+  if (!isParty && actor.role !== 'admin') {
+    throw new ForbiddenError('Only a party to the transfer or a household admin can void it');
+  }
+
+  // Conditional on the transfer still being active, so of two racing voids
+  // exactly one matches and the other reports the same conflict as a retry.
+  const voided = await prisma.transfer.updateMany({
+    where: { id: transferId, householdId, voidedAt: null },
+    data: { voidedAt: new Date() },
+  });
+  if (voided.count === 0) {
     throw new ConflictError('Transfer was already voided', ErrorCode.TRANSFER_ALREADY_VOIDED);
   }
-  await prisma.transfer.update({ where: { id: transferId }, data: { voidedAt: new Date() } });
 };

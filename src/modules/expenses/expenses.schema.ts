@@ -1,8 +1,14 @@
 import { z } from 'zod';
-import { paginationQuerySchema } from '../../shared/utils/pagination.js';
+import { idCursorPaginationQuerySchema } from '../../shared/utils/pagination.js';
+import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { includeVoidedSchema } from '../../shared/validation/include-voided.schema.js';
+import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
+import { textSchema } from '../../shared/validation/text.schema.js';
 
-const DECIMAL = /^\d+(\.\d+)?$/;
-const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** Upper bound on the people one expense is split across; keeps the write fan-out small. */
+export const MAX_PARTICIPANTS = 50;
+/** `shares` is an int4 column. The cap is far above any real split ("2 shares vs 1"). */
+const MAX_SHARES = 1_000_000;
 
 const householdId = z.object({ householdId: z.string().uuid() });
 const expenseParam = z.object({
@@ -13,11 +19,23 @@ const expenseParam = z.object({
 const participantSchema = z
   .object({
     userId: z.string().uuid(),
-    amount: z.string().regex(DECIMAL).optional(),
+    amount: moneyAmountSchema.optional(),
     percentage: z.coerce.number().min(0).max(100).optional(),
-    shares: z.number().int().positive().optional(),
+    shares: z.number().int().positive().max(MAX_SHARES).optional(),
   })
   .strict();
+
+// A repeated user would only fail later on the (expense, user) unique index.
+const participantsSchema = z
+  .array(participantSchema)
+  .min(1)
+  .max(MAX_PARTICIPANTS)
+  .refine(
+    (participants) => new Set(participants.map((p) => p.userId)).size === participants.length,
+    {
+      message: 'Each participant can only appear once',
+    },
+  );
 
 const splitTypeEnum = z.enum(['equal', 'exact', 'percentage', 'shares']);
 
@@ -33,15 +51,15 @@ export const createExpenseSchema = {
   params: householdId,
   body: z
     .object({
-      description: z.string().min(1).max(255),
-      notes: z.string().max(2000).optional(),
-      amount: z.string().regex(DECIMAL),
+      description: textSchema(255),
+      notes: textSchema(2000, 0).optional(),
+      amount: moneyAmountSchema,
       currencyCode: z.string().length(3).toUpperCase(),
-      expenseDate: z.string().regex(CIVIL_DATE),
+      expenseDate: civilDateSchema,
       categoryId: z.string().uuid().optional(),
       paidBy: z.string().uuid(),
       splitType: splitTypeEnum,
-      participants: z.array(participantSchema).min(1),
+      participants: participantsSchema,
     })
     .strict(),
 };
@@ -50,18 +68,18 @@ export const createExpenseSchema = {
 // participants) is recalculated from scratch — see void-expense.md — so
 // those three fields must be provided together, never individually.
 const splitFields = z.object({
-  amount: z.string().regex(DECIMAL),
+  amount: moneyAmountSchema,
   splitType: splitTypeEnum,
-  participants: z.array(participantSchema).min(1),
+  participants: participantsSchema,
 });
 
 export const updateExpenseSchema = {
   params: expenseParam,
   body: z
     .object({
-      description: z.string().min(1).max(255),
-      notes: z.string().max(2000).nullable(),
-      expenseDate: z.string().regex(CIVIL_DATE),
+      description: textSchema(255),
+      notes: textSchema(2000, 0).nullable(),
+      expenseDate: civilDateSchema,
       categoryId: z.string().uuid().nullable(),
       paidBy: z.string().uuid(),
     })
@@ -79,13 +97,15 @@ export const updateExpenseSchema = {
     ),
 };
 
-export const listExpensesQuerySchema = paginationQuerySchema.extend({
-  from: z.string().regex(CIVIL_DATE).optional(),
-  to: z.string().regex(CIVIL_DATE).optional(),
+export const listExpensesQuerySchema = idCursorPaginationQuerySchema.extend({
+  from: civilDateSchema.optional(),
+  to: civilDateSchema.optional(),
   categoryId: z.string().uuid().optional(),
   paidBy: z.string().uuid().optional(),
   participantId: z.string().uuid().optional(),
   status: z.enum(['active', 'voided', 'pending']).optional(),
+  // Ignored when `status` is given: that already names the exact set wanted.
+  includeVoided: includeVoidedSchema,
 });
 
 export type CreateExpenseDto = z.infer<typeof createExpenseSchema.body>;

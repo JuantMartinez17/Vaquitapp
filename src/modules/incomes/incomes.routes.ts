@@ -32,6 +32,12 @@ incomesRouter.get(
   requireHouseholdMember(),
   incomesController.list,
 );
+incomesRouter.get(
+  '/:incomeId',
+  validate(incomeIdParam),
+  requireHouseholdMember(),
+  incomesController.getOne,
+);
 incomesRouter.patch(
   '/:incomeId',
   validate(updateIncomeSchema),

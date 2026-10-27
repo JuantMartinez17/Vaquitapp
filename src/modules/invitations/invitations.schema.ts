@@ -5,7 +5,8 @@ const invitationParam = z.object({
   householdId: z.string().uuid(),
   invitationId: z.string().uuid(),
 });
-const tokenParam = z.object({ token: z.string().min(1) });
+// Tokens are 128 characters (see invitations.service); a longer value can never match.
+const tokenParam = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) });
 
 export const householdIdParam = {
   params: householdId,
@@ -13,7 +14,7 @@ export const householdIdParam = {
 
 export const createInvitationSchema = {
   params: householdId,
-  body: z.object({ invitedEmail: z.string().email().toLowerCase() }).strict(),
+  body: z.object({ invitedEmail: z.string().email().max(255).toLowerCase() }).strict(),
 };
 
 export const invitationIdParam = {

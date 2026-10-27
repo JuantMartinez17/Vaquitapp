@@ -49,6 +49,14 @@ const sqlStateOf = (error: Prisma.PrismaClientKnownRequestError): unknown => {
 };
 
 /**
+ * True when Prisma reports a unique-constraint violation (P2002). This is how
+ * a lost insert race surfaces, so services use it to turn the race into the
+ * same domain error as the sequential "already exists" case.
+ */
+export const isUniqueConstraintViolation = (error: unknown): boolean =>
+  classifyDatabaseError(error) === 'unique-violation';
+
+/**
  * Classifies a database-layer failure into the few kinds the HTTP layer
  * cares about, or `null` when the error is not a recognised database error.
  * Kept free of Express so it can be unit-tested with synthetic errors.

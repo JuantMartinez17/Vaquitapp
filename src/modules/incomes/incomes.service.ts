@@ -3,12 +3,13 @@ import { ConflictError, NotFoundError, ValidationError } from '../../shared/erro
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { parsePagination, buildPage } from '../../shared/utils/pagination.js';
-import type { Page, PaginationQuery } from '../../shared/utils/pagination.js';
+import type { Page } from '../../shared/utils/pagination.js';
 import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
 import { assertValidCategory } from '../categories/categories.service.js';
 import { INCOME_INCLUDE, toIncomeDto } from './incomes.mapper.js';
 import type { IncomeDto } from './incomes.mapper.js';
-import type { CreateIncomeDto, UpdateIncomeDto } from './incomes.schema.js';
+import type { CreateIncomeDto, UpdateIncomeDto, ListIncomesQuery } from './incomes.schema.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 
 export const getIncome = async (householdId: string, incomeId: string): Promise<IncomeDto> => {
   const income = await prisma.income.findFirst({
@@ -61,15 +62,35 @@ export const createIncome = async (
   return toIncomeDto(income);
 };
 
+const incomeAlreadyVoided = () =>
+  new ConflictError('Income was already voided', ErrorCode.INCOME_ALREADY_VOIDED);
+
 const loadActiveIncome = async (householdId: string, incomeId: string) => {
   const income = await prisma.income.findFirst({ where: { id: incomeId, householdId } });
   if (!income) {
     throw new NotFoundError('Income not found');
   }
   if (income.voidedAt) {
-    throw new ConflictError('Income was already voided', ErrorCode.INCOME_ALREADY_VOIDED);
+    throw incomeAlreadyVoided();
   }
   return income;
+};
+
+/**
+ * A conditional update matched no row. Re-reads to say why, so losing a race
+ * gives the same answer as the sequential case: 404 when the income is not in
+ * this household, otherwise "already voided".
+ */
+const rejectUnmatchedIncome = async (
+  db: Prisma.TransactionClient,
+  householdId: string,
+  incomeId: string,
+): Promise<never> => {
+  const exists = await db.income.count({ where: { id: incomeId, householdId } });
+  if (exists === 0) {
+    throw new NotFoundError('Income not found');
+  }
+  throw incomeAlreadyVoided();
 };
 
 export const updateIncome = async (
@@ -77,6 +98,8 @@ export const updateIncome = async (
   incomeId: string,
   dto: UpdateIncomeDto,
 ): Promise<IncomeDto> => {
+  // Read up front so a missing or voided income is reported before the body
+  // is judged; the write below re-checks the state atomically.
   await loadActiveIncome(householdId, incomeId);
 
   if (dto.receivedBy) {
@@ -99,33 +122,48 @@ export const updateIncome = async (
     amount = rounded.toFixed(currency.decimalPlaces);
   }
 
-  const income = await prisma.income.update({
-    where: { id: incomeId },
-    data: {
-      receivedBy: dto.receivedBy,
-      description: dto.description,
-      notes: dto.notes,
-      categoryId: dto.categoryId,
-      incomeDate: dto.incomeDate ? new Date(dto.incomeDate) : undefined,
-      amount,
-    },
-    include: INCOME_INCLUDE,
+  return prisma.$transaction(async (tx) => {
+    // `voidedAt: null` in the filter keeps an edit from landing on an income
+    // that was voided after the read above.
+    const updated = await tx.income.updateMany({
+      where: { id: incomeId, householdId, voidedAt: null },
+      data: {
+        receivedBy: dto.receivedBy,
+        description: dto.description,
+        notes: dto.notes,
+        categoryId: dto.categoryId,
+        incomeDate: dto.incomeDate ? new Date(dto.incomeDate) : undefined,
+        amount,
+      },
+    });
+    if (updated.count === 0) {
+      await rejectUnmatchedIncome(tx, householdId, incomeId);
+    }
+    const income = await tx.income.findUniqueOrThrow({
+      where: { id: incomeId },
+      include: INCOME_INCLUDE,
+    });
+    return toIncomeDto(income);
   });
-  return toIncomeDto(income);
 };
 
 export const voidIncome = async (householdId: string, incomeId: string): Promise<void> => {
-  await loadActiveIncome(householdId, incomeId);
-  await prisma.income.update({ where: { id: incomeId }, data: { voidedAt: new Date() } });
+  const voided = await prisma.income.updateMany({
+    where: { id: incomeId, householdId, voidedAt: null },
+    data: { voidedAt: new Date() },
+  });
+  if (voided.count === 0) {
+    await rejectUnmatchedIncome(prisma, householdId, incomeId);
+  }
 };
 
 export const listIncomes = async (
   householdId: string,
-  query: PaginationQuery,
+  query: ListIncomesQuery,
 ): Promise<Page<IncomeDto>> => {
   const { take, cursor } = parsePagination(query);
   const rows = await prisma.income.findMany({
-    where: { householdId, voidedAt: null },
+    where: { householdId, ...(query.includeVoided === 'true' ? {} : { voidedAt: null }) },
     include: INCOME_INCLUDE,
     orderBy: [{ incomeDate: 'desc' }, { id: 'desc' }],
     take: take + 1,
