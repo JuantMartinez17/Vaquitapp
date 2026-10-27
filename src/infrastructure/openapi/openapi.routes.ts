@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import helmet from 'helmet';
 import { openApiDocument } from './openapi.spec.js';
 
 /**
@@ -10,8 +11,37 @@ import { openApiDocument } from './openapi.spec.js';
  */
 export const openApiRouter = Router();
 
+// Helmet's default CSP (script-src 'self') blocks both the CDN bundle and
+// the inline bootstrap script, leaving /docs blank. The policy is relaxed
+// here only, for the one CDN host, and the bootstrap lives in a same-origin
+// file so no 'unsafe-inline' is needed for scripts. Swagger UI injects
+// <style> tags and style attributes at runtime, hence 'unsafe-inline' for
+// styles only.
+openApiRouter.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", 'https://unpkg.com'],
+      styleSrc: ["'self'", 'https://unpkg.com', "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https://unpkg.com'],
+      fontSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+    },
+  }),
+);
+
 openApiRouter.get('/openapi.json', (_req, res) => {
   res.json(openApiDocument);
+});
+
+openApiRouter.get('/swagger-init.js', (_req, res) => {
+  res.type('js').send(`window.ui = SwaggerUIBundle({
+  url: '/docs/openapi.json',
+  dom_id: '#swagger-ui',
+});
+`);
 });
 
 openApiRouter.get('/', (_req, res) => {
@@ -24,12 +54,7 @@ openApiRouter.get('/', (_req, res) => {
   <body>
     <div id="swagger-ui"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-      window.ui = SwaggerUIBundle({
-        url: '/docs/openapi.json',
-        dom_id: '#swagger-ui',
-      });
-    </script>
+    <script src="/docs/swagger-init.js"></script>
   </body>
 </html>`);
 });
