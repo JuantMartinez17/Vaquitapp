@@ -26,7 +26,7 @@ const participantSchema = z
   .strict();
 
 // A repeated user would only fail later on the (expense, user) unique index.
-const participantsSchema = z
+export const participantsSchema = z
   .array(participantSchema)
   .min(1)
   .max(MAX_PARTICIPANTS)

@@ -1,22 +1,14 @@
 import { z } from 'zod';
-
-const DECIMAL = /^\d+(\.\d+)?$/;
-const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
+import { textSchema } from '../../shared/validation/text.schema.js';
+import { participantsSchema } from '../expenses/expenses.schema.js';
 
 const householdId = z.object({ householdId: z.string().uuid() });
 const recurringExpenseParam = z.object({
   householdId: z.string().uuid(),
   recurringExpenseId: z.string().uuid(),
 });
-
-const participantSchema = z
-  .object({
-    userId: z.string().uuid(),
-    amount: z.string().regex(DECIMAL).optional(),
-    percentage: z.coerce.number().min(0).max(100).optional(),
-    shares: z.number().int().positive().optional(),
-  })
-  .strict();
 
 const splitTypeEnum = z.enum(['equal', 'exact', 'percentage', 'shares']);
 const frequencyEnum = z.enum(['daily', 'weekly', 'monthly', 'yearly']);
@@ -33,17 +25,17 @@ export const createRecurringExpenseSchema = {
   params: householdId,
   body: z
     .object({
-      description: z.string().min(1).max(255),
-      defaultAmount: z.string().regex(DECIMAL),
+      description: textSchema(255),
+      defaultAmount: moneyAmountSchema,
       currencyCode: z.string().length(3).toUpperCase(),
       categoryId: z.string().uuid().optional(),
       paidBy: z.string().uuid(),
       splitType: splitTypeEnum,
-      participants: z.array(participantSchema).min(1),
+      participants: participantsSchema,
       frequency: frequencyEnum,
       dayOfMonth: z.number().int().min(1).max(31).optional(),
-      startDate: z.string().regex(CIVIL_DATE),
-      endDate: z.string().regex(CIVIL_DATE).optional(),
+      startDate: civilDateSchema,
+      endDate: civilDateSchema.optional(),
     })
     .strict(),
 };
@@ -52,10 +44,10 @@ export const updateRecurringExpenseSchema = {
   params: recurringExpenseParam,
   body: z
     .object({
-      description: z.string().min(1).max(255),
+      description: textSchema(255),
       categoryId: z.string().uuid().nullable(),
       paidBy: z.string().uuid(),
-      endDate: z.string().regex(CIVIL_DATE).nullable(),
+      endDate: civilDateSchema.nullable(),
       isActive: z.boolean(),
     })
     .partial()

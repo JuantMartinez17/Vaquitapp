@@ -276,6 +276,42 @@ describe('input validation: settlements, transfers and incomes', () => {
   });
 });
 
+describe('input validation: recurring expenses', () => {
+  it('rejects bad dates, amounts and text on create and update', async () => {
+    const { admin, householdId } = await setupHousehold();
+    const url = base(householdId, 'recurring-expenses');
+    const body = (overrides: Record<string, unknown>) => ({
+      description: 'Rent',
+      defaultAmount: '100.00',
+      currencyCode: 'ARS',
+      paidBy: admin.id,
+      splitType: 'equal',
+      participants: [{ userId: admin.id }],
+      frequency: 'monthly',
+      startDate: '2026-01-01',
+      ...overrides,
+    });
+    for (const overrides of [
+      { startDate: '2026-02-31' },
+      { startDate: '0000-01-01' },
+      { endDate: '2026-13-01' },
+      { defaultAmount: '99999999999999.00' },
+      { defaultAmount: '1.234' },
+      { description: 'x y' },
+      { participants: [{ userId: admin.id, amount: '99999999999999.00' }] },
+    ]) {
+      const res = await post(admin, url, body(overrides));
+      assert.equal(res.status, 422, JSON.stringify(overrides));
+    }
+
+    const created = await post(admin, url, body({}));
+    assert.equal(created.status, 201);
+    const target = `${url}/${created.body.id}`;
+    assert.equal((await patch(admin, target, { endDate: '2026-02-30' })).status, 422);
+    assert.equal((await patch(admin, target, { description: 'x y' })).status, 422);
+  });
+});
+
 describe('input validation: invitations, categories and users', () => {
   it('rejects an invited email longer than the column', async () => {
     const { admin, householdId } = await setupHousehold();
