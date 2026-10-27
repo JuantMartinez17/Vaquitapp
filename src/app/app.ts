@@ -56,7 +56,19 @@ app.use(
   }),
 );
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGINS }));
+// Browsers hide every response header outside the CORS safelist from scripts.
+// These are the ones a client acts on: back-off hints, the replay marker, the
+// id to quote in a bug report and the rate-limit budget.
+const EXPOSED_HEADERS = [
+  'Retry-After',
+  'Idempotency-Replayed',
+  'X-Request-Id',
+  'RateLimit-Limit',
+  'RateLimit-Remaining',
+  'RateLimit-Reset',
+  'RateLimit-Policy',
+];
+app.use(cors({ origin: env.CORS_ORIGINS, exposedHeaders: EXPOSED_HEADERS }));
 app.use(express.json({ limit: '1mb' }));
 
 app.use(createHealthRouter());
