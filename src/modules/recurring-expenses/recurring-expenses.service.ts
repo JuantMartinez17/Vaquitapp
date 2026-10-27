@@ -277,11 +277,13 @@ const generateForTemplate = async (recurring: DueTemplate, today: Date): Promise
       select: { id: true, expenseDate: true },
     });
 
-    await tx.expenseSplit.createMany({
-      data: created.flatMap((expense) =>
-        splitRows.map((row) => ({ ...row, expenseId: expense.id })),
-      ),
-    });
+    if (created.length > 0) {
+      await tx.expenseSplit.createMany({
+        data: created.flatMap((expense) =>
+          splitRows.map((row) => ({ ...row, expenseId: expense.id })),
+        ),
+      });
+    }
 
     const lastCreated = created.reduce<Date | null>(
       (latest, expense) =>
@@ -290,8 +292,10 @@ const generateForTemplate = async (recurring: DueTemplate, today: Date): Promise
           : latest,
       null,
     );
-    await tx.recurringExpense.update({
-      where: { id: recurring.id },
+    // Guarded on the schedule we read: if an overlapping run already advanced
+    // this template, its write wins and ours must not restore stale values.
+    await tx.recurringExpense.updateMany({
+      where: { id: recurring.id, nextRunDate: recurring.nextRunDate },
       data: {
         nextRunDate,
         lastGeneratedDate: lastCreated ?? recurring.lastGeneratedDate,

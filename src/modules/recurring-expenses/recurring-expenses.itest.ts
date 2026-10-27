@@ -276,19 +276,23 @@ describe('recurring generation limits', () => {
     const householdId = await createTestHousehold(app, admin);
     const id = await createTemplate(admin, householdId, {
       frequency: 'daily',
-      startDate: '2026-01-01',
+      startDate: '2019-01-01',
     });
-    const longAfter = new Date('2026-12-31T00:00:00.000Z');
+    // Far from the 2026 dates other tests use: the job sweeps every template in
+    // the database, so a late run date here would also feed their templates.
+    const longAfter = new Date('2019-12-31T00:00:00.000Z');
 
     await generateDueOccurrences(longAfter);
     assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 62);
     const afterFirst = await prisma.recurringExpense.findUniqueOrThrow({ where: { id } });
-    assert.equal(afterFirst.nextRunDate.toISOString().slice(0, 10), '2026-03-04');
-    assert.equal(afterFirst.lastGeneratedDate?.toISOString().slice(0, 10), '2026-03-03');
+    assert.equal(afterFirst.nextRunDate.toISOString().slice(0, 10), '2019-03-04');
+    assert.equal(afterFirst.lastGeneratedDate?.toISOString().slice(0, 10), '2019-03-03');
     assert.equal(afterFirst.isActive, true);
 
     await generateDueOccurrences(longAfter);
     assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 124);
+    // Park the template so later runs by other tests do not keep feeding on it.
+    await prisma.recurringExpense.update({ where: { id }, data: { isActive: false } });
   });
 
   it('requires an Idempotency-Key on creation and replays the original response', async () => {
