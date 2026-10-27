@@ -23,7 +23,7 @@ describe('OpenAPI docs', () => {
       ).in,
       'header',
     );
-    assert.equal(res.body.paths['/auth/login'].post.security, undefined);
+    assert.deepEqual(res.body.paths['/auth/login'].post.security, []);
   });
 
   it('serves the interactive HTML shell', async () => {
