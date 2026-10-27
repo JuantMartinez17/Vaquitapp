@@ -1625,28 +1625,26 @@ The MVP is considered technically complete when:
 
 # 42. Open Decisions Before Implementation
 
-The following items must be explicitly resolved during domain-design before freezing the database/API contracts:
+The following items had to be explicitly resolved during domain-design before freezing the database/API contracts. **All of them are now decided and implemented**; each entry records the answer in one line (the working notes live in `docs/ROADMAP.md` §3, where they are labelled D0–D18).
 
-1. Exact household membership lifecycle.
-2. Invitation expiration and revocation rules.
-3. Expense lifecycle: edit/delete/void semantics.
-4. Whether expense edits create an audit trail in MVP.
-5. Exact recurring-expense occurrence-generation semantics.
-6. Currency representation and MVP currency restrictions.
-7. Attachment storage provider and retention policy.
-8. Exact settlement semantics and whether settlements can be partial.
-9. Whether transfers are MVP or introduced immediately after the expense core.
-10. Initial income model.
-11. Pagination strategy.
-12. Idempotency requirements for financial mutations.
-13. Notification mechanism for recurring expenses.
-14. Exact category ownership model: global, household-specific, or both.
-15. Whether a financial activity can be reassigned between households.
-16. Time-zone rules for dates and recurring schedules.
-17. API versioning policy.
-18. Production backup/recovery strategy.
-
-These are not blockers for the product definition, but they should be resolved before the corresponding feature is implemented.
+1. Exact household membership lifecycle. **Decided:** `joinedAt` / `leftAt`; leaving sets `leftAt` and never deletes history, and both leaving (`POST /households/:id/members/leave`) and an admin removal are blocked while the member's net balance is not zero (`409 MEMBER_HAS_OPEN_BALANCE`); the last admin can neither leave nor be demoted (`409 LAST_ADMIN`).
+2. Invitation expiration and revocation rules. **Decided:** opaque single-use token, 7-day TTL, states `pending | accepted | rejected | expired`, an admin can revoke while `pending`, one open invitation per (household, email); an expired one is closed as `expired` and the email can be invited again.
+3. Expense lifecycle: edit/delete/void semantics. **Decided:** financial facts are never deleted; `DELETE` voids (`active → voided`), and editing an active expense recomputes its splits in the same transaction.
+4. Whether expense edits create an audit trail in MVP. **Decided:** no audit table in the MVP; `createdBy` / `updatedAt` plus structured logs, with `audit_log` deferred to a later phase.
+5. Exact recurring-expense occurrence-generation semantics. **Decided:** a daily job materializes due occurrences as `pending` expenses (idempotent per template and date, bounded per run), and a member confirms or skips each one.
+6. Currency representation and MVP currency restrictions. **Decided:** one household = one currency, no conversion in the MVP, amounts rounded to the currency's decimal places, and the household currency is locked once there is any financial activity (`409 HOUSEHOLD_CURRENCY_LOCKED`).
+7. Attachment storage provider and retention policy. **Decided:** a `FileStorage` abstraction with a local (dev) and an S3-compatible (production) implementation, 10 MB per file, at most 5 per expense, MIME checked by magic bytes, downloads through short-lived presigned URLs issued only after a membership check.
+8. Exact settlement semantics and whether settlements can be partial. **Decided:** any positive amount (partial by nature), recorded as confirmed, voidable but never deleted, and only a party to it or an admin can void it.
+9. Whether transfers are MVP or introduced immediately after the expense core. **Decided:** introduced right after the expense core and shipped in the MVP; they do not move balances.
+10. Initial income model. **Decided:** a single beneficiary (`receivedBy`), not split, and it does not affect balances between members, only analytics.
+11. Pagination strategy. **Decided:** cursor-based on the row id (a UUID), default 20 and maximum 100 per page, no `page` or `total`; analytics require a bounded date range.
+12. Idempotency requirements for financial mutations. **Decided:** a mandatory `Idempotency-Key` on creating expenses, settlements, incomes, transfers and recurring expenses; the key is claimed before the handler runs, only 2xx responses are replayed, and keys are kept for 24 hours.
+13. Notification mechanism for recurring expenses. **Decided:** none in the MVP (no push, no email); the client polls `GET .../recurring-expenses/upcoming`.
+14. Exact category ownership model: global, household-specific, or both. **Decided:** both; an immutable global system catalog plus per-household categories managed by its admins, and a household sees the union.
+15. Whether a financial activity can be reassigned between households. **Decided:** no; `householdId` is immutable, and a mistake is fixed by voiding and recreating.
+16. Time-zone rules for dates and recurring schedules. **Decided:** business dates are civil `DATE`s without time, system timestamps are UTC, and `Household.timezone` is stored for recurring schedules (today the generation job still uses the UTC date).
+17. API versioning policy. **Decided:** `/api/v1` in the URL; a new major version only for a real breaking change, additive changes do not bump it.
+18. Production backup/recovery strategy. **Decided:** managed backups of the production database (Neon) plus a documented restore drill (`docs/runbooks/restore-drill.md`); the drill has been run locally and must be repeated against Neon before go-live.
 
 ---
 
