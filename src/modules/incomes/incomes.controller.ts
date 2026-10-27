@@ -1,7 +1,7 @@
 import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import { routeParam } from '../../shared/utils/request.js';
 import * as incomesService from './incomes.service.js';
-import type { PaginationQuery } from '../../shared/utils/pagination.js';
+import type { ListIncomesQuery } from './incomes.schema.js';
 
 export const create = asyncHandler(async (req, res) => {
   const income = await incomesService.createIncome(
@@ -13,8 +13,14 @@ export const create = asyncHandler(async (req, res) => {
 });
 
 export const list = asyncHandler(async (req, res) => {
-  const query = req.validatedQuery as PaginationQuery;
+  const query = req.validatedQuery as ListIncomesQuery;
   res.json(await incomesService.listIncomes(routeParam(req, 'householdId'), query));
+});
+
+export const getOne = asyncHandler(async (req, res) => {
+  res.json(
+    await incomesService.getIncome(routeParam(req, 'householdId'), routeParam(req, 'incomeId')),
+  );
 });
 
 export const update = asyncHandler(async (req, res) => {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { idCursorPaginationQuerySchema } from '../../shared/utils/pagination.js';
 import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { includeVoidedSchema } from '../../shared/validation/include-voided.schema.js';
 import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
 import { textSchema } from '../../shared/validation/text.schema.js';
 
@@ -48,7 +49,10 @@ export const updateIncomeSchema = {
     .strict(),
 };
 
-export const listIncomesQuerySchema = idCursorPaginationQuerySchema;
+export const listIncomesQuerySchema = idCursorPaginationQuerySchema.extend({
+  includeVoided: includeVoidedSchema,
+});
 
 export type CreateIncomeDto = z.infer<typeof createIncomeSchema.body>;
 export type UpdateIncomeDto = z.infer<typeof updateIncomeSchema.body>;
+export type ListIncomesQuery = z.infer<typeof listIncomesQuerySchema>;
