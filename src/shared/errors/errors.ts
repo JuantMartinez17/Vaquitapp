@@ -61,3 +61,36 @@ export class TooManyRequestsError extends AppError {
     super(message, 429, code);
   }
 }
+
+// Platform-level errors: produced by infrastructure concerns (body limits,
+// upload capacity, an unreachable database), not by business rules.
+
+export class PayloadTooLargeError extends AppError {
+  constructor(message = 'Payload too large', code: ErrorCode = ErrorCode.PAYLOAD_TOO_LARGE) {
+    super(message, 413, code);
+  }
+}
+
+export class UnsupportedMediaTypeError extends AppError {
+  constructor(
+    message = 'Unsupported media type',
+    code: ErrorCode = ErrorCode.UNSUPPORTED_MEDIA_TYPE,
+  ) {
+    super(message, 415, code);
+  }
+}
+
+/**
+ * The service is up but cannot take this request right now. When
+ * `retryAfterSeconds` is set the error middleware advertises it as a
+ * `Retry-After` header, so well-behaved clients back off instead of hammering.
+ */
+export class ServiceUnavailableError extends AppError {
+  constructor(
+    message = 'Service temporarily unavailable',
+    code: ErrorCode = ErrorCode.SERVICE_UNAVAILABLE,
+    public retryAfterSeconds?: number,
+  ) {
+    super(message, 503, code);
+  }
+}

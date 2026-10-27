@@ -1,9 +1,16 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { prisma } from '../../infrastructure/database/prisma.js';
+import { logger } from '../../infrastructure/logging/logger.js';
 import { fileStorage } from '../../infrastructure/storage/create-file-storage.js';
 import { sniffMimeType } from '../../domain/files/sniff-mime.js';
 import { env } from '../../app/config.js';
-import { BadRequestError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
+import {
+  BadRequestError,
+  NotFoundError,
+  PayloadTooLargeError,
+  UnsupportedMediaTypeError,
+  ValidationError,
+} from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { toAttachmentDto } from './attachments.mapper.js';
 import type { AttachmentDto } from './attachments.mapper.js';
@@ -44,7 +51,7 @@ export const uploadAttachment = async (
   }
 
   if (file.declaredSize > env.MAX_UPLOAD_BYTES) {
-    throw new ValidationError(
+    throw new PayloadTooLargeError(
       `File exceeds the ${env.MAX_UPLOAD_BYTES}-byte limit`,
       ErrorCode.ATTACHMENT_TOO_LARGE,
     );
@@ -64,9 +71,8 @@ export const uploadAttachment = async (
   // client-supplied Content-Type (SPECS §29, D7).
   const mimeType = sniffMimeType(file.buffer);
   if (!mimeType) {
-    throw new ValidationError(
+    throw new UnsupportedMediaTypeError(
       'Unsupported file type — only JPEG, PNG, WEBP and PDF are allowed',
-      ErrorCode.UNSUPPORTED_MEDIA_TYPE,
     );
   }
 
@@ -86,21 +92,31 @@ export const uploadAttachment = async (
 
   await fileStorage.upload({ key: storageKey, body: file.buffer, contentType: mimeType });
 
-  const attachment = await prisma.expenseAttachment.create({
-    data: {
-      id: attachmentId,
-      expenseId,
-      storageKey,
-      storageProvider: env.STORAGE_PROVIDER,
-      bucket: env.STORAGE_PROVIDER === 's3' ? (env.S3_BUCKET ?? '') : 'local',
-      originalFilename: file.originalFilename,
-      mimeType,
-      sizeBytes: BigInt(file.buffer.length),
-      sha256Hash,
-      uploadedBy: userId,
-    },
-  });
-  return toAttachmentDto(attachment);
+  try {
+    const attachment = await prisma.expenseAttachment.create({
+      data: {
+        id: attachmentId,
+        expenseId,
+        storageKey,
+        storageProvider: env.STORAGE_PROVIDER,
+        bucket: env.STORAGE_PROVIDER === 's3' ? (env.S3_BUCKET ?? '') : 'local',
+        originalFilename: file.originalFilename,
+        mimeType,
+        sizeBytes: BigInt(file.buffer.length),
+        sha256Hash,
+        uploadedBy: userId,
+      },
+    });
+    return toAttachmentDto(attachment);
+  } catch (err) {
+    // The blob is already stored but nothing references it, so it would sit
+    // there forever. Cleanup is best-effort: the original failure is what the
+    // caller needs to see, not a secondary one from the delete.
+    await fileStorage.delete(storageKey).catch((cleanupErr: unknown) => {
+      logger.warn({ err: cleanupErr, storageKey }, 'failed to delete orphaned attachment blob');
+    });
+    throw err;
+  }
 };
 
 export const listAttachments = async (
@@ -150,5 +166,13 @@ export const deleteAttachment = async (
     where: { id: attachment.id },
     data: { deletedAt: new Date() },
   });
-  await fileStorage.delete(attachment.storageKey);
+  // The attachment is already gone from the API's point of view. A storage
+  // hiccup must not turn that into a 500 (a retry would then 404); the blob
+  // is merely left behind and the failure is logged.
+  await fileStorage.delete(attachment.storageKey).catch((err: unknown) => {
+    logger.warn(
+      { err, storageKey: attachment.storageKey },
+      'failed to delete attachment blob after soft delete',
+    );
+  });
 };

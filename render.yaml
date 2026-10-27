@@ -20,7 +20,10 @@ services:
     plan: free
     region: oregon
     branch: main
-    healthCheckPath: /health/ready
+    # /health, NOT /health/ready: Render hits this path constantly, and a DB
+    # ping each time would keep Neon's free compute awake and burn its quota.
+    # A database blip must also not make Render restart a healthy process.
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production

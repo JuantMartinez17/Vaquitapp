@@ -15,6 +15,7 @@ COPY . .
 # prisma.config.ts still requires DATABASE_URL to resolve to load at all.
 ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 RUN npx prisma generate
+# tsconfig.build.json leaves tests out of dist/.
 RUN npm run build
 
 # ---- prod-deps: a separate install with devDependencies stripped ----
@@ -28,25 +29,39 @@ RUN npm pkg delete scripts.prepare && npm ci --omit=dev
 # ---- runtime: the image that actually ships ----
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
+# V8's heap limit defaults to a share of the machine's RAM, which inside a
+# 512 MB container can let the heap grow until the kernel OOM-kills the
+# process. 320 MB leaves ~190 MB of headroom for what the heap limit does not
+# cover: the Node runtime itself, native bcrypt, Buffers (uploads are held in
+# memory) and the OS.
+ENV NODE_OPTIONS=--max-old-space-size=320
 WORKDIR /app
 
-COPY --from=prod-deps /app/node_modules ./node_modules
+# tini runs as PID 1: it forwards SIGTERM to node (so graceful shutdown
+# actually triggers on deploys) and reaps zombie processes, which node as
+# PID 1 would not.
+RUN apk add --no-cache tini
+
+COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 # dist/generated/prisma is the compiled Prisma client: the "prisma-client"
 # generator (schema.prisma) is configured with a TS output path, so `tsc`
 # compiles it as ordinary source — there is no separate native/wasm engine
 # artifact to copy, since this project uses @prisma/adapter-pg instead of
 # Prisma's bundled query engine binary.
-COPY --from=build /app/dist ./dist
-COPY package.json ./
-# Needed by `prisma migrate deploy`, run as Render's Pre-Deploy step against
-# this same image (see README.md § Deploy) — schema, migration SQL, and the
-# `prisma` CLI, which is why `prisma` lives in dependencies, not devDependencies.
-COPY prisma.config.ts ./
-COPY prisma ./prisma
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --chown=node:node package.json ./
+# Migrations are NOT run from this image: Render Free has no pre-deploy
+# step, so `prisma migrate deploy` runs from a developer machine against
+# Neon's direct URL (see README § Deploy). That is why neither the prisma CLI
+# nor prisma/ + prisma.config.ts ship here.
+
+USER node
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# No HEALTHCHECK on purpose: Render ignores the Dockerfile one and uses
+# healthCheckPath (render.yaml), and a check that spawns a Node process every
+# 30 s is real CPU on a 0.1 vCPU instance.
 
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/server.js"]

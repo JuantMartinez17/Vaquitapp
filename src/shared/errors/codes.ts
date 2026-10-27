@@ -62,6 +62,11 @@ export const ErrorCode = {
   // Cross-cutting
   IDEMPOTENCY_KEY_CONFLICT: 'IDEMPOTENCY_KEY_CONFLICT',
   RATE_LIMITED: 'RATE_LIMITED',
+
+  // Platform hardening
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
+  UPLOAD_CAPACITY_EXCEEDED: 'UPLOAD_CAPACITY_EXCEEDED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

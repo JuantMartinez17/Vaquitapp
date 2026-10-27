@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { describe, it, after } from 'node:test';
+import { readdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { describe, it, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
 import { app } from '../../app/app.js';
+import { env } from '../../app/config.js';
+import { fileStorage } from '../../infrastructure/storage/create-file-storage.js';
+import { uploadAttachment } from './attachments.service.js';
 import { prisma } from '../../infrastructure/database/prisma.js';
 import { registerTestUser, createTestHousehold } from '../../shared/testing/http.js';
 
@@ -99,7 +104,7 @@ describe('attachments', () => {
         filename: 'totally-a-photo.png',
         contentType: 'image/png',
       })
-      .expect(422);
+      .expect(415);
     assert.equal(res.body.error.code, 'UNSUPPORTED_MEDIA_TYPE');
   });
 
@@ -162,5 +167,81 @@ describe('attachments', () => {
       })
       .expect(422);
     assert.equal(sixth.body.error.code, 'TOO_MANY_ATTACHMENTS');
+  });
+
+  it('rejects a file over MAX_UPLOAD_BYTES with 413 ATTACHMENT_TOO_LARGE', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const expenseId = await createExpense(admin.accessToken, householdId, admin.id);
+
+    const oversized = Buffer.concat([PNG_BYTES, Buffer.alloc(env.MAX_UPLOAD_BYTES)]);
+    const res = await authed(admin.accessToken)(
+      request(app).post(`/api/v1/households/${householdId}/expenses/${expenseId}/attachments`),
+    )
+      .attach('file', oversized, { filename: 'huge.png', contentType: 'image/png' })
+      .expect(413);
+    assert.equal(res.body.error.code, 'ATTACHMENT_TOO_LARGE');
+  });
+
+  it('rejects a multipart body with more than one file with 400', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const expenseId = await createExpense(admin.accessToken, householdId, admin.id);
+
+    const res = await authed(admin.accessToken)(
+      request(app).post(`/api/v1/households/${householdId}/expenses/${expenseId}/attachments`),
+    )
+      .attach('file', PNG_BYTES, { filename: 'a.png', contentType: 'image/png' })
+      .attach('file', Buffer.concat([PNG_BYTES, Buffer.from([1])]), {
+        filename: 'b.png',
+        contentType: 'image/png',
+      })
+      .expect(400);
+    assert.equal(res.body.error.code, 'BAD_REQUEST');
+  });
+
+  it('deletes the stored blob when the database insert fails', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const expenseId = await createExpense(admin.accessToken, householdId, admin.id);
+
+    // An uploader that does not exist violates the foreign key, so the insert
+    // fails only after the blob has been written.
+    await assert.rejects(
+      uploadAttachment(householdId, expenseId, randomUUID(), {
+        buffer: PNG_BYTES,
+        originalFilename: 'orphan.png',
+        declaredSize: PNG_BYTES.length,
+      }),
+    );
+
+    const blobDir = resolve(env.LOCAL_STORAGE_DIR, 'attachments', expenseId);
+    const leftovers = await readdir(blobDir).catch(() => [] as string[]);
+    assert.deepEqual(leftovers, [], 'no orphaned blob is left in storage');
+  });
+
+  it('still answers 204 when removing the blob fails after the soft delete', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const expenseId = await createExpense(admin.accessToken, householdId, admin.id);
+    const uploaded = await authed(admin.accessToken)(
+      request(app).post(`/api/v1/households/${householdId}/expenses/${expenseId}/attachments`),
+    )
+      .attach('file', PNG_BYTES, { filename: 'a.png', contentType: 'image/png' })
+      .expect(201);
+
+    const failing = mock.method(fileStorage, 'delete', () =>
+      Promise.reject(new Error('storage unavailable')),
+    );
+    try {
+      await authed(admin.accessToken)(
+        request(app).delete(
+          `/api/v1/households/${householdId}/expenses/${expenseId}/attachments/${uploaded.body.id}`,
+        ),
+      ).expect(204);
+      assert.equal(failing.mock.callCount(), 1);
+    } finally {
+      failing.mock.restore();
+    }
   });
 });
