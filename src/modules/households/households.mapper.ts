@@ -1,4 +1,4 @@
-import type { Household, HouseholdMember, User } from '../../generated/prisma/client.js';
+import type { Household, HouseholdMember, Prisma } from '../../generated/prisma/client.js';
 
 export interface HouseholdDto {
   id: string;
@@ -40,7 +40,19 @@ export interface MemberDto {
   };
 }
 
-export const toMemberDto = (member: HouseholdMember & { user: User }): MemberDto => ({
+// Only the columns MemberDto exposes — a bare `user: true` would also load
+// the password hash for every member of the household.
+export const MEMBER_INCLUDE = {
+  user: {
+    select: { id: true, username: true, displayName: true, avatarUrl: true, email: true },
+  },
+} satisfies Prisma.HouseholdMemberInclude;
+
+export type MemberWithUser = Prisma.HouseholdMemberGetPayload<{
+  include: typeof MEMBER_INCLUDE;
+}>;
+
+export const toMemberDto = (member: MemberWithUser): MemberDto => ({
   userId: member.userId,
   role: member.role,
   joinedAt: member.joinedAt.toISOString(),

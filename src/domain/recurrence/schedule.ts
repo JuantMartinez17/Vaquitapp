@@ -44,16 +44,20 @@ export const advanceDate = (
  * Every occurrence date from `nextRunDate` up to and including `today`
  * (inclusive), in order — lets the generator catch up if the job didn't run
  * for several days (SPECS D5).
+ *
+ * `limit` bounds the walk itself, not just the result: a daily template that
+ * was offline for years must not allocate thousands of dates in one run.
  */
 export const dueDates = (
   nextRunDate: Date,
   today: Date,
   frequency: RecurrenceFrequency,
   dayOfMonth?: number,
+  limit = Number.POSITIVE_INFINITY,
 ): Date[] => {
   const dates: Date[] = [];
   let cursor = nextRunDate;
-  while (cursor.getTime() <= today.getTime()) {
+  while (cursor.getTime() <= today.getTime() && dates.length < limit) {
     dates.push(cursor);
     cursor = advanceDate(cursor, frequency, dayOfMonth);
   }

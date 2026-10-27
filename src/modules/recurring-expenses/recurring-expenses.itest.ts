@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
@@ -11,7 +12,7 @@ after(async () => {
 });
 
 const authed = (token: string) => (req: request.Test) =>
-  req.set('Authorization', `Bearer ${token}`);
+  req.set('Authorization', `Bearer ${token}`).set('Idempotency-Key', randomUUID());
 
 describe('recurring expenses', () => {
   it('rejects an unauthenticated request', async () => {
@@ -216,5 +217,116 @@ describe('recurring expenses', () => {
       request(app).get(`/api/v1/households/${householdId}/expenses?status=pending`),
     ).expect(200);
     assert.equal(list.body.data.length, 0);
+  });
+});
+
+describe('recurring generation limits', () => {
+  const createTemplate = async (
+    admin: Awaited<ReturnType<typeof registerTestUser>>,
+    householdId: string,
+    overrides: Record<string, unknown>,
+  ): Promise<string> => {
+    const res = await authed(admin.accessToken)(
+      request(app).post(`/api/v1/households/${householdId}/recurring-expenses`),
+    )
+      .send({
+        description: 'Template',
+        defaultAmount: '10.00',
+        currencyCode: 'ARS',
+        paidBy: admin.id,
+        splitType: 'equal',
+        participants: [{ userId: admin.id }],
+        frequency: 'monthly',
+        startDate: '2026-01-01',
+        ...overrides,
+      })
+      .expect(201);
+    return res.body.id as string;
+  };
+
+  it('deactivates a template once its next run falls past the end date', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const id = await createTemplate(admin, householdId, { endDate: '2026-01-15' });
+
+    await generateDueOccurrences(new Date('2026-01-01T00:00:00.000Z'));
+    assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 1);
+
+    // A later run must neither generate more nor keep the template alive.
+    await generateDueOccurrences(new Date('2026-03-01T00:00:00.000Z'));
+    assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 1);
+    const template = await prisma.recurringExpense.findUniqueOrThrow({ where: { id } });
+    assert.equal(template.isActive, false);
+  });
+
+  it('deactivates a template whose end date is already behind its next run', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const id = await createTemplate(admin, householdId, { endDate: '2025-12-01' });
+
+    await generateDueOccurrences(new Date('2026-01-10T00:00:00.000Z'));
+
+    assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 0);
+    const template = await prisma.recurringExpense.findUniqueOrThrow({ where: { id } });
+    assert.equal(template.isActive, false);
+  });
+
+  it('caps the occurrences per template per run and resumes where it stopped', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const id = await createTemplate(admin, householdId, {
+      frequency: 'daily',
+      startDate: '2019-01-01',
+    });
+    // Far from the 2026 dates other tests use: the job sweeps every template in
+    // the database, so a late run date here would also feed their templates.
+    const longAfter = new Date('2019-12-31T00:00:00.000Z');
+
+    await generateDueOccurrences(longAfter);
+    assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 62);
+    const afterFirst = await prisma.recurringExpense.findUniqueOrThrow({ where: { id } });
+    assert.equal(afterFirst.nextRunDate.toISOString().slice(0, 10), '2019-03-04');
+    assert.equal(afterFirst.lastGeneratedDate?.toISOString().slice(0, 10), '2019-03-03');
+    assert.equal(afterFirst.isActive, true);
+
+    await generateDueOccurrences(longAfter);
+    assert.equal(await prisma.expense.count({ where: { recurringExpenseId: id } }), 124);
+    // Park the template so later runs by other tests do not keep feeding on it.
+    await prisma.recurringExpense.update({ where: { id }, data: { isActive: false } });
+  });
+
+  it('requires an Idempotency-Key on creation and replays the original response', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const body = {
+      description: 'Once',
+      defaultAmount: '10.00',
+      currencyCode: 'ARS',
+      paidBy: admin.id,
+      splitType: 'equal',
+      participants: [{ userId: admin.id }],
+      frequency: 'monthly',
+      startDate: '2026-01-01',
+    };
+    const url = `/api/v1/households/${householdId}/recurring-expenses`;
+
+    await request(app)
+      .post(url)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send(body)
+      .expect(400);
+
+    const key = randomUUID();
+    const send = () =>
+      request(app)
+        .post(url)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .set('Idempotency-Key', key)
+        .send(body)
+        .expect(201);
+    const first = await send();
+    const replay = await send();
+    assert.equal(replay.body.id, first.body.id);
+    assert.equal(await prisma.recurringExpense.count({ where: { householdId } }), 1);
   });
 });

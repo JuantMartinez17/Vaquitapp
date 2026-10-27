@@ -1,4 +1,5 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 import { NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
@@ -22,9 +23,6 @@ import type {
 } from './recurring-expenses.schema.js';
 
 const civilDateToday = (): Date => new Date(new Date().toISOString().slice(0, 10));
-
-const isUniqueConstraintViolation = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 
 export const createRecurringExpense = async (
   userId: string,
@@ -169,99 +167,190 @@ export const deleteRecurringExpense = async (
 };
 
 /**
+ * Upper bounds on one run, so a long outage cannot turn into thousands of
+ * sequential round trips on a tiny instance. Leftover backlog is picked up
+ * by the next run, because `nextRunDate` only advances over what was created.
+ */
+const MAX_OCCURRENCES_PER_TEMPLATE_PER_RUN = 62;
+const TEMPLATE_BATCH_SIZE = 100;
+
+// Only what generation reads; the default `include` would also pull every
+// column of every split and the currency row.
+const DUE_TEMPLATE_SELECT = {
+  id: true,
+  householdId: true,
+  categoryId: true,
+  paidBy: true,
+  createdBy: true,
+  description: true,
+  defaultAmount: true,
+  currencyCode: true,
+  splitType: true,
+  frequency: true,
+  dayOfMonth: true,
+  endDate: true,
+  nextRunDate: true,
+  lastGeneratedDate: true,
+  currency: { select: { decimalPlaces: true } },
+  splits: { select: { userId: true, amount: true, percentage: true, shares: true } },
+} satisfies Prisma.RecurringExpenseSelect;
+
+type DueTemplate = Prisma.RecurringExpenseGetPayload<{ select: typeof DUE_TEMPLATE_SELECT }>;
+
+const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
+
+/**
+ * Creates one template's overdue occurrences (up to the per-run cap) and
+ * advances its schedule in the SAME transaction: a crash can never leave
+ * occurrences created with `nextRunDate` still pointing at them, nor the
+ * schedule moved past occurrences that do not exist.
+ *
+ * `skipDuplicates` (ON CONFLICT DO NOTHING) makes a re-run a no-op without
+ * a unique violation, which would abort the whole transaction.
+ *
+ * Returns the number of occurrences actually created.
+ */
+const generateForTemplate = async (recurring: DueTemplate, today: Date): Promise<number> => {
+  // Nothing past the end date is ever due, so cap the walk there.
+  const until =
+    recurring.endDate && recurring.endDate.getTime() < today.getTime() ? recurring.endDate : today;
+  const occurrenceDates = dueDates(
+    recurring.nextRunDate,
+    until,
+    recurring.frequency,
+    recurring.dayOfMonth ?? undefined,
+    MAX_OCCURRENCES_PER_TEMPLATE_PER_RUN,
+  );
+
+  const lastOccurrence = occurrenceDates[occurrenceDates.length - 1];
+  if (!lastOccurrence) {
+    // Due, yet no occurrence falls on or before the end date: the template
+    // is finished. Deactivating it stops it from being reloaded on every run.
+    await prisma.recurringExpense.update({
+      where: { id: recurring.id },
+      data: { isActive: false },
+    });
+    return 0;
+  }
+
+  const nextRunDate = advanceDate(
+    lastOccurrence,
+    recurring.frequency,
+    recurring.dayOfMonth ?? undefined,
+  );
+  const isFinished =
+    recurring.endDate !== null && nextRunDate.getTime() > recurring.endDate.getTime();
+
+  // The split is the same for every occurrence of a template.
+  const decimalPlaces = recurring.currency.decimalPlaces;
+  const splitRows = splitsToRows(
+    computeSplits(
+      recurring.splitType,
+      recurring.defaultAmount.toFixed(decimalPlaces),
+      recurring.splits.map((s) => ({
+        userId: s.userId,
+        amount: s.amount?.toString(),
+        percentage: s.percentage ? Number(s.percentage) : undefined,
+        shares: s.shares ?? undefined,
+      })),
+      decimalPlaces,
+    ),
+    decimalPlaces,
+  );
+
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.expense.createManyAndReturn({
+      data: occurrenceDates.map((expenseDate) => ({
+        householdId: recurring.householdId,
+        categoryId: recurring.categoryId,
+        paidBy: recurring.paidBy,
+        recurringExpenseId: recurring.id,
+        description: recurring.description,
+        amount: recurring.defaultAmount,
+        currencyCode: recurring.currencyCode,
+        splitType: recurring.splitType,
+        expenseDate,
+        status: 'pending' as const,
+        createdBy: recurring.createdBy,
+      })),
+      skipDuplicates: true,
+      select: { id: true, expenseDate: true },
+    });
+
+    if (created.length > 0) {
+      await tx.expenseSplit.createMany({
+        data: created.flatMap((expense) =>
+          splitRows.map((row) => ({ ...row, expenseId: expense.id })),
+        ),
+      });
+    }
+
+    const lastCreated = created.reduce<Date | null>(
+      (latest, expense) =>
+        latest === null || expense.expenseDate.getTime() > latest.getTime()
+          ? expense.expenseDate
+          : latest,
+      null,
+    );
+    // Guarded on the schedule we read: if an overlapping run already advanced
+    // this template, its write wins and ours must not restore stale values.
+    await tx.recurringExpense.updateMany({
+      where: { id: recurring.id, nextRunDate: recurring.nextRunDate },
+      data: {
+        nextRunDate,
+        lastGeneratedDate: lastCreated ?? recurring.lastGeneratedDate,
+        ...(isFinished ? { isActive: false } : {}),
+      },
+    });
+    return created.length;
+  });
+};
+
+/**
  * Materializes every overdue occurrence, across every household, as a
  * `pending` Expense (generate-recurring-occurrence.md). Safe to call any
  * number of times: the (recurringExpenseId, expenseDate) unique constraint
- * makes a repeat insert a no-op instead of a duplicate, and one recurring
- * expense's failure is logged and skipped rather than aborting the batch.
+ * makes a repeat insert a no-op instead of a duplicate, and one template's
+ * failure is logged and skipped rather than aborting the batch.
+ *
+ * Templates are read in id-ordered batches so memory stays flat however many
+ * are due; a failing template cannot starve the rest because the cursor
+ * always moves forward.
  *
  * Returns the number of occurrences actually created.
  */
 export const generateDueOccurrences = async (today: Date = civilDateToday()): Promise<number> => {
-  const due = await prisma.recurringExpense.findMany({
-    where: { isActive: true, deletedAt: null, nextRunDate: { lte: today } },
-    include: { splits: true, currency: true },
-  });
-
   let generated = 0;
-  for (const recurring of due) {
-    try {
-      const occurrenceDates = dueDates(
-        recurring.nextRunDate,
-        today,
-        recurring.frequency,
-        recurring.dayOfMonth ?? undefined,
-      ).filter((date) => !recurring.endDate || date.getTime() <= recurring.endDate.getTime());
+  let afterId: string | undefined;
 
-      let nextRunDate = recurring.nextRunDate;
-      let lastGeneratedDate: Date | null = recurring.lastGeneratedDate;
+  for (;;) {
+    const batch = await prisma.recurringExpense.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        nextRunDate: { lte: today },
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: 'asc' },
+      take: TEMPLATE_BATCH_SIZE,
+      select: DUE_TEMPLATE_SELECT,
+    });
 
-      for (const occurrenceDate of occurrenceDates) {
-        const splits = computeSplits(
-          recurring.splitType,
-          recurring.defaultAmount.toFixed(recurring.currency.decimalPlaces),
-          recurring.splits.map((s) => ({
-            userId: s.userId,
-            amount: s.amount?.toString(),
-            percentage: s.percentage ? Number(s.percentage) : undefined,
-            shares: s.shares ?? undefined,
-          })),
-          recurring.currency.decimalPlaces,
-        );
-
-        try {
-          await prisma.$transaction(async (tx) => {
-            const expense = await tx.expense.create({
-              data: {
-                householdId: recurring.householdId,
-                categoryId: recurring.categoryId,
-                paidBy: recurring.paidBy,
-                recurringExpenseId: recurring.id,
-                description: recurring.description,
-                amount: recurring.defaultAmount,
-                currencyCode: recurring.currencyCode,
-                splitType: recurring.splitType,
-                expenseDate: occurrenceDate,
-                status: 'pending',
-                createdBy: recurring.createdBy,
-              },
-            });
-            await tx.expenseSplit.createMany({
-              data: splitsToRows(splits, recurring.currency.decimalPlaces).map((row) => ({
-                ...row,
-                expenseId: expense.id,
-              })),
-            });
-          });
-          generated += 1;
-          lastGeneratedDate = occurrenceDate;
-        } catch (error) {
-          if (!isUniqueConstraintViolation(error)) {
-            throw error;
-          }
-          // Already generated by an earlier run of this job — idempotent no-op.
-        }
-
-        nextRunDate = advanceDate(
-          occurrenceDate,
-          recurring.frequency,
-          recurring.dayOfMonth ?? undefined,
+    for (const recurring of batch) {
+      try {
+        generated += await generateForTemplate(recurring, today);
+      } catch (error) {
+        logger.error(
+          { error, recurringExpenseId: recurring.id, nextRunDate: isoDay(recurring.nextRunDate) },
+          'failed to generate recurring expense occurrence',
         );
       }
-
-      if (occurrenceDates.length > 0) {
-        await prisma.recurringExpense.update({
-          where: { id: recurring.id },
-          data: { nextRunDate, lastGeneratedDate },
-        });
-      }
-    } catch (error) {
-      logger.error(
-        { error, recurringExpenseId: recurring.id },
-        'failed to generate recurring expense occurrence',
-      );
     }
-  }
 
-  return generated;
+    const last = batch[batch.length - 1];
+    if (!last || batch.length < TEMPLATE_BATCH_SIZE) {
+      return generated;
+    }
+    afterId = last.id;
+  }
 };

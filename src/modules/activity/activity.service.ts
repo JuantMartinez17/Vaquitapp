@@ -1,4 +1,6 @@
+import { z } from 'zod';
 import { prisma } from '../../infrastructure/database/prisma.js';
+import { BadRequestError } from '../../shared/errors/errors.js';
 import { assertHouseholdActive } from '../households/households.service.js';
 import { formatMoney } from '../../domain/money/money.js';
 import { parsePagination } from '../../shared/utils/pagination.js';
@@ -19,20 +21,28 @@ interface ActivityPage {
   nextCursor: string | null;
 }
 
-interface Cursor {
-  date: string;
-  id: string;
-}
+// The cursor is client-supplied, so it is validated like any other input: a
+// malformed one must be a 400, and an unchecked date or id would otherwise
+// reach Prisma and surface as a 500.
+const cursorSchema = z.object({ date: z.iso.datetime(), id: z.uuid() });
+
+type Cursor = z.infer<typeof cursorSchema>;
 
 const encodeCursor = (cursor: Cursor): string =>
   Buffer.from(JSON.stringify(cursor)).toString('base64url');
 
 const decodeCursor = (raw: string): Cursor => {
+  let decoded: unknown;
   try {
-    return JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as Cursor;
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
   } catch {
-    throw new Error('Invalid activity cursor');
+    throw new BadRequestError('Invalid activity cursor');
   }
+  const parsed = cursorSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new BadRequestError('Invalid activity cursor');
+  }
+  return parsed.data;
 };
 
 /**
@@ -75,25 +85,51 @@ export const getActivity = async (
       where: { householdId, status: 'active', ...keysetWhere('expenseDate', cursor) },
       orderBy: [{ expenseDate: 'desc' }, { id: 'desc' }],
       take: limit,
-      include: { currency: true },
+      select: {
+        id: true,
+        expenseDate: true,
+        amount: true,
+        description: true,
+        currency: { select: { decimalPlaces: true } },
+      },
     }),
     prisma.income.findMany({
       where: { householdId, voidedAt: null, ...keysetWhere('incomeDate', cursor) },
       orderBy: [{ incomeDate: 'desc' }, { id: 'desc' }],
       take: limit,
-      include: { currency: true },
+      select: {
+        id: true,
+        incomeDate: true,
+        amount: true,
+        description: true,
+        currency: { select: { decimalPlaces: true } },
+      },
     }),
     prisma.transfer.findMany({
       where: { householdId, voidedAt: null, ...keysetWhere('transferDate', cursor) },
       orderBy: [{ transferDate: 'desc' }, { id: 'desc' }],
       take: limit,
-      include: { from: true, to: true, currency: true },
+      select: {
+        id: true,
+        transferDate: true,
+        amount: true,
+        from: { select: { displayName: true } },
+        to: { select: { displayName: true } },
+        currency: { select: { decimalPlaces: true } },
+      },
     }),
     prisma.settlement.findMany({
       where: { householdId, status: { not: 'voided' }, ...keysetWhere('settlementDate', cursor) },
       orderBy: [{ settlementDate: 'desc' }, { id: 'desc' }],
       take: limit,
-      include: { from: true, to: true, currency: true },
+      select: {
+        id: true,
+        settlementDate: true,
+        amount: true,
+        from: { select: { displayName: true } },
+        to: { select: { displayName: true } },
+        currency: { select: { decimalPlaces: true } },
+      },
     }),
   ]);
 
