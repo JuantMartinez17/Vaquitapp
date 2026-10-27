@@ -240,6 +240,29 @@ describe('idempotency middleware lifecycle', () => {
     assert.equal(calls(), 1);
   });
 
+  it('does not take over a claim that a slow handler may still be running', async () => {
+    const { user, post, calls } = await setup(() => null);
+    const household = randomUUID();
+    const key = randomUUID();
+    const body = { amount: '1.00' };
+    // Older than any short grace period, yet well inside the 120 s request timeout.
+    await prisma.idempotencyKey.create({
+      data: {
+        key,
+        userId: user.id,
+        endpoint: `${ENDPOINT} @${household}`,
+        requestHash: hashOf(body),
+        statusCode: 0,
+        responseBody: '',
+        createdAt: new Date(Date.now() - 100 * 1000),
+      },
+    });
+
+    const res = await post(key, household, body).expect(409);
+    assert.equal(res.body.error.code, 'IDEMPOTENCY_KEY_IN_PROGRESS');
+    assert.equal(calls(), 0);
+  });
+
   it('ignores an error response stored by an older version of the middleware', async () => {
     const { user, post, calls } = await setup(() => null);
     const household = randomUUID();

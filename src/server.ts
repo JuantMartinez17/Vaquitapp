@@ -1,5 +1,6 @@
 import { app } from './app/app.js';
 import { env } from './app/config.js';
+import { HTTP_REQUEST_TIMEOUT_MS } from './app/http-timeouts.js';
 import { prisma } from './infrastructure/database/prisma.js';
 import { logger } from './infrastructure/logging/logger.js';
 import { startInterval, type SchedulerHandle } from './infrastructure/scheduler/scheduler.js';
@@ -35,7 +36,7 @@ const server = app.listen(env.PORT, (error?: Error) => {
 // forever.
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
-server.requestTimeout = 120_000;
+server.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;

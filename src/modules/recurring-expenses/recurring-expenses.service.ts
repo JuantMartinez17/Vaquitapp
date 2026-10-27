@@ -341,7 +341,11 @@ export const generateDueOccurrences = async (today: Date = civilDateToday()): Pr
         generated += await generateForTemplate(recurring, today);
       } catch (error) {
         logger.error(
-          { error, recurringExpenseId: recurring.id, nextRunDate: isoDay(recurring.nextRunDate) },
+          {
+            err: error,
+            recurringExpenseId: recurring.id,
+            nextRunDate: isoDay(recurring.nextRunDate),
+          },
           'failed to generate recurring expense occurrence',
         );
       }

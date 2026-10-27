@@ -6,6 +6,7 @@ import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import { routeParam } from '../../shared/utils/request.js';
 import { BadRequestError, ConflictError, UnauthorizedError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
+import { HTTP_REQUEST_TIMEOUT_MS } from '../http-timeouts.js';
 
 /** Retention of a stored response; an older row is treated as if it did not exist. */
 const KEY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -20,10 +21,11 @@ const IN_PROGRESS = 0;
 /**
  * An in-progress claim older than this is assumed to belong to a request that
  * died with its process (a restart on a small instance); a retry may take it
- * over. It must stay well above the slowest legitimate request, or a slow
- * handler could run twice.
+ * over. It must outlast the HTTP server's request timeout, or a slow but
+ * still-running handler could be executed a second time by its own retry; the
+ * margin covers the time between the claim and the handler finishing.
  */
-const STALE_CLAIM_MS = 60_000;
+const STALE_CLAIM_MS = HTTP_REQUEST_TIMEOUT_MS + 10_000;
 
 const RETRY_AFTER_SECONDS = 2;
 const MAX_CLAIM_ATTEMPTS = 3;
@@ -142,10 +144,8 @@ const claimKey = async (
  * - The same key with a different body, endpoint or household is 409
  *   `IDEMPOTENCY_KEY_CONFLICT`. The household is part of the scope because the
  *   same body means something different in another household.
- * - A stored response expires after 24h, enforced on read (the row is replaced).
- *   Nothing prunes rows that are never read again; add a scheduled
- *   `DELETE ... WHERE created_at < now() - interval '24 hours'` once the
- *   scheduler carries more than one job.
+ * - A stored response expires after 24h, enforced on read (the row is replaced);
+ *   rows that are never read again are purged by the maintenance job.
  *
  * Must run AFTER `validate.middleware`, so the hash covers the Zod-normalized
  * body (stable key order, coerced types) rather than whatever the client sent.
@@ -193,7 +193,7 @@ export const idempotent = (endpoint: string): RequestHandler =>
       return settle
         .catch((error: unknown) => {
           logger.error(
-            { error, key, endpoint: scope, statusCode },
+            { err: error, key, endpoint: scope, statusCode },
             'failed to settle idempotency key',
           );
         })
