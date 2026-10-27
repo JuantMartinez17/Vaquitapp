@@ -123,3 +123,28 @@ describe('activity', () => {
     assert.equal(new Set(seen).size, 5, 'no duplicate items across pages');
   });
 });
+
+describe('activity cursor validation', () => {
+  const encode = (value: unknown): string =>
+    Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
+
+  const cases: [string, string][] = [
+    ['not base64url JSON', 'definitely-not-a-cursor'],
+    ['JSON of the wrong shape', encode({ foo: 'bar' })],
+    ['an unparseable date', encode({ date: 'not-a-date', id: randomUUID() })],
+    ['a non-uuid id', encode({ date: '2026-02-01T00:00:00.000Z', id: 'nope' })],
+    ['a bare JSON string', encode('"just a string"')],
+  ];
+
+  for (const [label, cursor] of cases) {
+    it(`answers 400 for a cursor that is ${label}`, async () => {
+      const admin = await registerTestUser(app);
+      const householdId = await createTestHousehold(app, admin);
+
+      const res = await authed(admin.accessToken)(
+        request(app).get(`/api/v1/households/${householdId}/activity?cursor=${cursor}`),
+      ).expect(400);
+      assert.equal(res.body.error.code, 'BAD_REQUEST');
+    });
+  }
+});
