@@ -4,7 +4,11 @@ import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { parsePagination, buildPage } from '../../shared/utils/pagination.js';
 import type { Page } from '../../shared/utils/pagination.js';
-import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import {
+  assertHouseholdActive,
+  assertActiveMembers,
+  lockHouseholdShared,
+} from '../households/households.service.js';
 import { assertValidCategory } from '../categories/categories.service.js';
 import { INCOME_INCLUDE, toIncomeDto } from './incomes.mapper.js';
 import type { IncomeDto } from './incomes.mapper.js';
@@ -27,37 +31,43 @@ export const createIncome = async (
   householdId: string,
   dto: CreateIncomeDto,
 ): Promise<IncomeDto> => {
-  const household = await assertHouseholdActive(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
-  await assertActiveMembers(householdId, [dto.receivedBy], ErrorCode.NOT_A_MEMBER);
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
+  // One transaction from the lock to the insert, so the receiver and currency
+  // checked here are still the household's when the income lands.
+  const income = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
-  const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero');
-  }
+    const household = await assertHouseholdActive(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
+    await assertActiveMembers(householdId, [dto.receivedBy], ErrorCode.NOT_A_MEMBER, tx);
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
 
-  const income = await prisma.income.create({
-    data: {
-      householdId,
-      receivedBy: dto.receivedBy,
-      description: dto.description,
-      notes: dto.notes ?? null,
-      amount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      categoryId: dto.categoryId ?? null,
-      incomeDate: new Date(dto.incomeDate),
-      createdBy: userId,
-    },
-    include: INCOME_INCLUDE,
+    const currency = await tx.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
+    const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero');
+    }
+
+    return tx.income.create({
+      data: {
+        householdId,
+        receivedBy: dto.receivedBy,
+        description: dto.description,
+        notes: dto.notes ?? null,
+        amount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        categoryId: dto.categoryId ?? null,
+        incomeDate: new Date(dto.incomeDate),
+        createdBy: userId,
+      },
+      include: INCOME_INCLUDE,
+    });
   });
   return toIncomeDto(income);
 };
@@ -102,27 +112,30 @@ export const updateIncome = async (
   // is judged; the write below re-checks the state atomically.
   await loadActiveIncome(householdId, incomeId);
 
-  if (dto.receivedBy) {
-    await assertActiveMembers(householdId, [dto.receivedBy], ErrorCode.NOT_A_MEMBER);
-  }
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
-
-  let amount: string | undefined;
-  if (dto.amount !== undefined) {
-    const household = await assertHouseholdActive(householdId);
-    const currency = await prisma.currency.findUniqueOrThrow({
-      where: { code: household.defaultCurrencyCode },
-    });
-    const rounded = roundToCurrency(dto.amount, currency.decimalPlaces);
-    if (rounded.lte(0)) {
-      throw new ValidationError('Amount must be greater than zero');
-    }
-    amount = rounded.toFixed(currency.decimalPlaces);
-  }
-
   return prisma.$transaction(async (tx) => {
+    // The receiver and currency judged below must still hold when the edit lands.
+    await lockHouseholdShared(tx, householdId);
+
+    if (dto.receivedBy) {
+      await assertActiveMembers(householdId, [dto.receivedBy], ErrorCode.NOT_A_MEMBER, tx);
+    }
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    let amount: string | undefined;
+    if (dto.amount !== undefined) {
+      const household = await assertHouseholdActive(householdId, tx);
+      const currency = await tx.currency.findUniqueOrThrow({
+        where: { code: household.defaultCurrencyCode },
+      });
+      const rounded = roundToCurrency(dto.amount, currency.decimalPlaces);
+      if (rounded.lte(0)) {
+        throw new ValidationError('Amount must be greater than zero');
+      }
+      amount = rounded.toFixed(currency.decimalPlaces);
+    }
+
     // `voidedAt: null` in the filter keeps an edit from landing on an income
     // that was voided after the read above.
     const updated = await tx.income.updateMany({

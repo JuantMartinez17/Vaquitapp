@@ -9,7 +9,11 @@ import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { parsePagination, buildPage } from '../../shared/utils/pagination.js';
 import type { Page } from '../../shared/utils/pagination.js';
-import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import {
+  assertHouseholdActive,
+  assertActiveMembers,
+  lockHouseholdShared,
+} from '../households/households.service.js';
 import { TRANSFER_INCLUDE, toTransferDto } from './transfers.mapper.js';
 import type { TransferDto } from './transfers.mapper.js';
 import type { CreateTransferDto, ListTransfersQuery } from './transfers.schema.js';
@@ -28,33 +32,44 @@ export const createTransfer = async (
     throw new ForbiddenError('You can only record a transfer you are a party to');
   }
 
-  const household = await assertHouseholdActive(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
-  await assertActiveMembers(householdId, [dto.fromUser, dto.toUser], ErrorCode.INVALID_TRANSFER);
+  // One transaction from the lock to the insert, so the parties and currency
+  // checked here are still the household's when the transfer lands.
+  const transfer = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
-  const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero', ErrorCode.INVALID_TRANSFER);
-  }
-
-  const transfer = await prisma.transfer.create({
-    data: {
+    const household = await assertHouseholdActive(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
+    await assertActiveMembers(
       householdId,
-      fromUser: dto.fromUser,
-      toUser: dto.toUser,
-      amount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      transferDate: new Date(dto.transferDate),
-      notes: dto.notes ?? null,
-      createdBy: requestingUserId,
-    },
-    include: TRANSFER_INCLUDE,
+      [dto.fromUser, dto.toUser],
+      ErrorCode.INVALID_TRANSFER,
+      tx,
+    );
+
+    const currency = await tx.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
+    const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero', ErrorCode.INVALID_TRANSFER);
+    }
+
+    return tx.transfer.create({
+      data: {
+        householdId,
+        fromUser: dto.fromUser,
+        toUser: dto.toUser,
+        amount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        transferDate: new Date(dto.transferDate),
+        notes: dto.notes ?? null,
+        createdBy: requestingUserId,
+      },
+      include: TRANSFER_INCLUDE,
+    });
   });
   return toTransferDto(transfer);
 };

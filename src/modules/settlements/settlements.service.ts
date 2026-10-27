@@ -13,7 +13,11 @@ import { SETTLEMENT_INCLUDE, toSettlementDto } from './settlements.mapper.js';
 import type { SettlementDto } from './settlements.mapper.js';
 import type { CreateSettlementDto, ListSettlementsQuery } from './settlements.schema.js';
 import type { MemberRole } from '../../generated/prisma/client.js';
-import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import {
+  assertHouseholdActive,
+  assertActiveMembers,
+  lockHouseholdShared,
+} from '../households/households.service.js';
 
 export const createSettlement = async (
   requestingUserId: string,
@@ -32,34 +36,45 @@ export const createSettlement = async (
     throw new ForbiddenError('You can only record a settlement you are a party to');
   }
 
-  const household = await assertHouseholdActive(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
+  // One transaction from the lock to the insert, so the parties and currency
+  // checked here are still the household's when the settlement lands.
+  const settlement = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  await assertActiveMembers(householdId, [dto.fromUser, dto.toUser], ErrorCode.INVALID_SETTLEMENT);
+    const household = await assertHouseholdActive(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
 
-  const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
-  const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero', ErrorCode.INVALID_SETTLEMENT);
-  }
-
-  const settlement = await prisma.settlement.create({
-    data: {
+    await assertActiveMembers(
       householdId,
-      fromUser: dto.fromUser,
-      toUser: dto.toUser,
-      amount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      settlementDate: new Date(dto.settlementDate),
-      notes: dto.notes ?? null,
-      createdBy: requestingUserId,
-    },
-    include: SETTLEMENT_INCLUDE,
+      [dto.fromUser, dto.toUser],
+      ErrorCode.INVALID_SETTLEMENT,
+      tx,
+    );
+
+    const currency = await tx.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
+    const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero', ErrorCode.INVALID_SETTLEMENT);
+    }
+
+    return tx.settlement.create({
+      data: {
+        householdId,
+        fromUser: dto.fromUser,
+        toUser: dto.toUser,
+        amount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        settlementDate: new Date(dto.settlementDate),
+        notes: dto.notes ?? null,
+        createdBy: requestingUserId,
+      },
+      include: SETTLEMENT_INCLUDE,
+    });
   });
   return toSettlementDto(settlement);
 };

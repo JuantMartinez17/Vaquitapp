@@ -5,7 +5,11 @@ import { NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
 import { advanceDate, dueDates } from '../../domain/recurrence/schedule.js';
-import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import {
+  assertHouseholdActive,
+  assertActiveMembers,
+  lockHouseholdShared,
+} from '../households/households.service.js';
 import { assertValidCategory } from '../categories/categories.service.js';
 import { computeSplits, splitsToRows } from '../expenses/expenses.service.js';
 import {
@@ -29,70 +33,77 @@ export const createRecurringExpense = async (
   householdId: string,
   dto: CreateRecurringExpenseDto,
 ): Promise<RecurringExpenseDto> => {
-  const household = await assertHouseholdActive(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
-  await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
-  await assertActiveMembers(
-    householdId,
-    dto.participants.map((p) => p.userId),
-    ErrorCode.INVALID_PARTICIPANT,
-  );
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
+  // One transaction from the lock to the insert, so the payer, participants and
+  // currency checked here are still the household's when the template lands.
+  const recurring = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
-  const amount = roundToCurrency(dto.defaultAmount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero');
-  }
-
-  // Validate the split shape/invariants up front, using the same domain
-  // functions the generator will use later — a template that can never
-  // produce a valid split shouldn't be creatable in the first place.
-  computeSplits(
-    dto.splitType,
-    amount.toFixed(currency.decimalPlaces),
-    dto.participants,
-    currency.decimalPlaces,
-  );
-
-  const startDate = new Date(dto.startDate);
-  const dayOfMonth =
-    dto.dayOfMonth ?? (dto.frequency === 'monthly' ? startDate.getUTCDate() : undefined);
-
-  const recurring = await prisma.recurringExpense.create({
-    data: {
+    const household = await assertHouseholdActive(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
+    await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER, tx);
+    await assertActiveMembers(
       householdId,
-      categoryId: dto.categoryId ?? null,
-      paidBy: dto.paidBy,
-      description: dto.description,
-      defaultAmount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      splitType: dto.splitType,
-      frequency: dto.frequency,
-      dayOfMonth: dayOfMonth ?? null,
-      startDate,
-      endDate: dto.endDate ? new Date(dto.endDate) : null,
-      nextRunDate: startDate,
-      createdBy: userId,
-      splits: {
-        createMany: {
-          data: dto.participants.map((p) => ({
-            userId: p.userId,
-            amount: p.amount ?? null,
-            percentage: p.percentage !== undefined ? p.percentage.toString() : null,
-            shares: p.shares ?? null,
-          })),
+      dto.participants.map((p) => p.userId),
+      ErrorCode.INVALID_PARTICIPANT,
+      tx,
+    );
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    const currency = await tx.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
+    const amount = roundToCurrency(dto.defaultAmount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero');
+    }
+
+    // Validate the split shape/invariants up front, using the same domain
+    // functions the generator will use later — a template that can never
+    // produce a valid split shouldn't be creatable in the first place.
+    computeSplits(
+      dto.splitType,
+      amount.toFixed(currency.decimalPlaces),
+      dto.participants,
+      currency.decimalPlaces,
+    );
+
+    const startDate = new Date(dto.startDate);
+    const dayOfMonth =
+      dto.dayOfMonth ?? (dto.frequency === 'monthly' ? startDate.getUTCDate() : undefined);
+
+    return tx.recurringExpense.create({
+      data: {
+        householdId,
+        categoryId: dto.categoryId ?? null,
+        paidBy: dto.paidBy,
+        description: dto.description,
+        defaultAmount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        splitType: dto.splitType,
+        frequency: dto.frequency,
+        dayOfMonth: dayOfMonth ?? null,
+        startDate,
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        nextRunDate: startDate,
+        createdBy: userId,
+        splits: {
+          createMany: {
+            data: dto.participants.map((p) => ({
+              userId: p.userId,
+              amount: p.amount ?? null,
+              percentage: p.percentage !== undefined ? p.percentage.toString() : null,
+              shares: p.shares ?? null,
+            })),
+          },
         },
       },
-    },
-    include: RECURRING_EXPENSE_INCLUDE,
+      include: RECURRING_EXPENSE_INCLUDE,
+    });
   });
   return toRecurringExpenseDto(recurring);
 };
@@ -134,23 +145,29 @@ export const updateRecurringExpense = async (
   dto: UpdateRecurringExpenseDto,
 ): Promise<RecurringExpenseDto> => {
   await loadOwnRecurringExpense(householdId, recurringExpenseId);
-  if (dto.paidBy) {
-    await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
-  }
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
 
-  const recurring = await prisma.recurringExpense.update({
-    where: { id: recurringExpenseId },
-    data: {
-      description: dto.description,
-      categoryId: dto.categoryId,
-      paidBy: dto.paidBy,
-      endDate: dto.endDate === undefined ? undefined : dto.endDate ? new Date(dto.endDate) : null,
-      isActive: dto.isActive,
-    },
-    include: RECURRING_EXPENSE_INCLUDE,
+  const recurring = await prisma.$transaction(async (tx) => {
+    // The payer judged below must still be a member when the edit lands.
+    await lockHouseholdShared(tx, householdId);
+
+    if (dto.paidBy) {
+      await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER, tx);
+    }
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    return tx.recurringExpense.update({
+      where: { id: recurringExpenseId },
+      data: {
+        description: dto.description,
+        categoryId: dto.categoryId,
+        paidBy: dto.paidBy,
+        endDate: dto.endDate === undefined ? undefined : dto.endDate ? new Date(dto.endDate) : null,
+        isActive: dto.isActive,
+      },
+      include: RECURRING_EXPENSE_INCLUDE,
+    });
   });
   return toRecurringExpenseDto(recurring);
 };

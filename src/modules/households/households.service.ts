@@ -23,8 +23,11 @@ const countActiveMembers = (householdId: string): Promise<number> =>
   prisma.householdMember.count({ where: { householdId, leftAt: null } });
 
 /** Loads an active (non-deleted) household, or throws HOUSEHOLD_NOT_FOUND. Reused by every other household-scoped module. */
-export const assertHouseholdActive = async (householdId: string): Promise<Household> => {
-  const household = await prisma.household.findFirst({
+export const assertHouseholdActive = async (
+  householdId: string,
+  db: Prisma.TransactionClient = prisma,
+): Promise<Household> => {
+  const household = await db.household.findFirst({
     where: { id: householdId, deletedAt: null },
   });
   if (!household) {
@@ -38,9 +41,10 @@ export const assertActiveMembers = async (
   householdId: string,
   userIds: string[],
   code: ErrorCode,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<void> => {
   const uniqueIds = [...new Set(userIds)];
-  const count = await prisma.householdMember.count({
+  const count = await db.householdMember.count({
     where: { householdId, userId: { in: uniqueIds }, leftAt: null },
   });
   if (count !== uniqueIds.length) {
@@ -114,6 +118,23 @@ export const lockHousehold = async (
   householdId: string,
 ): Promise<void> => {
   await tx.$queryRaw`SELECT "id" FROM "households" WHERE "id" = ${householdId}::uuid FOR UPDATE`;
+};
+
+/**
+ * The lock for writes that depend on the household's membership or currency
+ * (expenses, settlements, incomes, transfers, recurring templates). It is a
+ * SHARE lock: writers of that kind run side by side, but each waits for an
+ * in-flight `lockHousehold` holder (leave, remove, role or currency change)
+ * and that holder waits for them. Take it first in the transaction, before the
+ * checks it protects: under READ COMMITTED every later statement then sees
+ * whatever the lock holder committed, so a member who left, or a currency that
+ * changed, cannot slip between a check and the insert it guards.
+ */
+export const lockHouseholdShared = async (
+  tx: Prisma.TransactionClient,
+  householdId: string,
+): Promise<void> => {
+  await tx.$queryRaw`SELECT "id" FROM "households" WHERE "id" = ${householdId}::uuid FOR SHARE`;
 };
 
 /**

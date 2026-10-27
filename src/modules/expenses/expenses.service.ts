@@ -24,6 +24,7 @@ import type {
 } from './expenses.schema.js';
 import type { Prisma, SplitType } from '../../generated/prisma/client.js';
 import { assertValidCategory } from '../categories/categories.service.js';
+import { lockHouseholdShared } from '../households/households.service.js';
 
 /** Dispatches to the right domain split strategy. Reused by recurring-expenses when materializing an occurrence. */
 export const computeSplits = (
@@ -123,8 +124,11 @@ export const getExpense = async (householdId: string, expenseId: string): Promis
 };
 
 /** The household with its currency, in one query: both are needed to validate any amount. */
-const loadHouseholdWithCurrency = async (householdId: string) => {
-  const household = await prisma.household.findFirst({
+const loadHouseholdWithCurrency = async (
+  householdId: string,
+  db: Prisma.TransactionClient = prisma,
+) => {
+  const household = await db.household.findFirst({
     where: { id: householdId, deletedAt: null },
     include: { defaultCurrency: true },
   });
@@ -173,55 +177,60 @@ export const createExpense = async (
   householdId: string,
   dto: CreateExpenseDto,
 ): Promise<ExpenseDto> => {
-  const household = await loadHouseholdWithCurrency(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
+  // One transaction from the lock to the insert, so the payer, participants and
+  // currency checked here are still the household's when the expense lands.
+  const created = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  const currency = household.defaultCurrency;
-  const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero');
-  }
+    const household = await loadHouseholdWithCurrency(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
 
-  await assertActiveParties(
-    prisma,
-    householdId,
-    { payerId: dto.paidBy, participantIds: dto.participants.map((p) => p.userId) },
-    ValidationError,
-  );
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
+    const currency = household.defaultCurrency;
+    const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero');
+    }
 
-  const splits = computeSplits(
-    dto.splitType,
-    amount.toFixed(currency.decimalPlaces),
-    dto.participants,
-    currency.decimalPlaces,
-  );
-
-  // One nested create instead of create + createMany + re-read: Prisma runs a
-  // nested write in a single transaction (the expense and its splits persist
-  // together or not at all) and returns the finished row with its relations.
-  const created = await prisma.expense.create({
-    data: {
+    await assertActiveParties(
+      tx,
       householdId,
-      categoryId: dto.categoryId ?? null,
-      paidBy: dto.paidBy,
-      description: dto.description,
-      notes: dto.notes ?? null,
-      amount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      splitType: dto.splitType,
-      expenseDate: new Date(dto.expenseDate),
-      createdBy: userId,
-      splits: { createMany: { data: splitsToRows(splits, currency.decimalPlaces) } },
-    },
-    include: EXPENSE_INCLUDE,
+      { payerId: dto.paidBy, participantIds: dto.participants.map((p) => p.userId) },
+      ValidationError,
+    );
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    const splits = computeSplits(
+      dto.splitType,
+      amount.toFixed(currency.decimalPlaces),
+      dto.participants,
+      currency.decimalPlaces,
+    );
+
+    // One nested create instead of create + createMany + re-read: the expense
+    // and its splits persist together and come back as the finished row.
+    return tx.expense.create({
+      data: {
+        householdId,
+        categoryId: dto.categoryId ?? null,
+        paidBy: dto.paidBy,
+        description: dto.description,
+        notes: dto.notes ?? null,
+        amount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        splitType: dto.splitType,
+        expenseDate: new Date(dto.expenseDate),
+        createdBy: userId,
+        splits: { createMany: { data: splitsToRows(splits, currency.decimalPlaces) } },
+      },
+      include: EXPENSE_INCLUDE,
+    });
   });
   return toExpenseDto(created);
 };
@@ -273,43 +282,46 @@ export const updateExpense = async (
   // is judged; the write below re-checks the status atomically.
   await loadActiveExpense(householdId, expenseId);
 
-  await assertActiveParties(
-    prisma,
-    householdId,
-    { payerId: dto.paidBy, participantIds: dto.participants?.map((p) => p.userId) },
-    ValidationError,
-  );
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
-
-  let splitUpdate: {
-    amount: Decimal;
-    splitType: SplitType;
-    splits: SplitResult[];
-    decimalPlaces: number;
-  } | null = null;
-  if (dto.amount !== undefined && dto.splitType !== undefined && dto.participants !== undefined) {
-    const { defaultCurrency: currency } = await loadHouseholdWithCurrency(householdId);
-    const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
-    if (amount.lte(0)) {
-      throw new ValidationError('Amount must be greater than zero');
-    }
-    const splits = computeSplits(
-      dto.splitType,
-      amount.toFixed(currency.decimalPlaces),
-      dto.participants,
-      currency.decimalPlaces,
-    );
-    splitUpdate = {
-      amount,
-      splitType: dto.splitType,
-      splits,
-      decimalPlaces: currency.decimalPlaces,
-    };
-  }
-
   return prisma.$transaction(async (tx) => {
+    // The people and currency judged below must still hold when the edit lands.
+    await lockHouseholdShared(tx, householdId);
+
+    await assertActiveParties(
+      tx,
+      householdId,
+      { payerId: dto.paidBy, participantIds: dto.participants?.map((p) => p.userId) },
+      ValidationError,
+    );
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    let splitUpdate: {
+      amount: Decimal;
+      splitType: SplitType;
+      splits: SplitResult[];
+      decimalPlaces: number;
+    } | null = null;
+    if (dto.amount !== undefined && dto.splitType !== undefined && dto.participants !== undefined) {
+      const { defaultCurrency: currency } = await loadHouseholdWithCurrency(householdId, tx);
+      const amount = roundToCurrency(dto.amount, currency.decimalPlaces);
+      if (amount.lte(0)) {
+        throw new ValidationError('Amount must be greater than zero');
+      }
+      const splits = computeSplits(
+        dto.splitType,
+        amount.toFixed(currency.decimalPlaces),
+        dto.participants,
+        currency.decimalPlaces,
+      );
+      splitUpdate = {
+        amount,
+        splitType: dto.splitType,
+        splits,
+        decimalPlaces: currency.decimalPlaces,
+      };
+    }
+
     // The conditional update comes first: it takes the row lock, so a
     // concurrent void or edit waits here and then sees the committed state.
     // Replacing the splits only after that guard also keeps two racing edits
@@ -368,6 +380,10 @@ export const confirmExpense = async (
   expenseId: string,
 ): Promise<ExpenseDto> => {
   await prisma.$transaction(async (tx) => {
+    // Before the status flip: the membership check below must see any leave
+    // that was already holding the household lock.
+    await lockHouseholdShared(tx, householdId);
+
     const confirmed = await tx.expense.updateMany({
       where: { id: expenseId, householdId, status: 'pending' },
       data: { status: 'active' },
