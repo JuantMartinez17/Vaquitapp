@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { textSchema } from '../../shared/validation/text.schema.js';
 import { BCRYPT_MAX_PASSWORD_BYTES } from './auth.password.js';
 
 export const registerSchema = {
@@ -16,7 +17,7 @@ export const registerSchema = {
         .refine((value) => Buffer.byteLength(value, 'utf8') <= BCRYPT_MAX_PASSWORD_BYTES, {
           message: `Password must be at most ${BCRYPT_MAX_PASSWORD_BYTES} bytes`,
         }),
-      displayName: z.string().min(1).max(100).optional(),
+      displayName: textSchema(100).optional(),
       preferredCurrencyCode: z.string().length(3).toUpperCase().optional(),
     })
     .strict(),

@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { paginationQuerySchema } from '../../shared/utils/pagination.js';
-
-const DECIMAL = /^\d+(\.\d+)?$/;
-const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+import { idCursorPaginationQuerySchema } from '../../shared/utils/pagination.js';
+import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
+import { moneyAmountSchema } from '../../shared/validation/money-amount.schema.js';
+import { textSchema } from '../../shared/validation/text.schema.js';
 
 const householdId = z.object({ householdId: z.string().uuid() });
 const incomeParam = z.object({
@@ -23,12 +23,12 @@ export const createIncomeSchema = {
   body: z
     .object({
       receivedBy: z.string().uuid(),
-      description: z.string().min(1).max(255),
-      notes: z.string().max(2000).optional(),
-      amount: z.string().regex(DECIMAL),
+      description: textSchema(255),
+      notes: textSchema(2000, 0).optional(),
+      amount: moneyAmountSchema,
       currencyCode: z.string().length(3).toUpperCase(),
       categoryId: z.string().uuid().optional(),
-      incomeDate: z.string().regex(CIVIL_DATE),
+      incomeDate: civilDateSchema,
     })
     .strict(),
 };
@@ -38,17 +38,17 @@ export const updateIncomeSchema = {
   body: z
     .object({
       receivedBy: z.string().uuid(),
-      description: z.string().min(1).max(255),
-      notes: z.string().max(2000).nullable(),
-      amount: z.string().regex(DECIMAL),
+      description: textSchema(255),
+      notes: textSchema(2000, 0).nullable(),
+      amount: moneyAmountSchema,
       categoryId: z.string().uuid().nullable(),
-      incomeDate: z.string().regex(CIVIL_DATE),
+      incomeDate: civilDateSchema,
     })
     .partial()
     .strict(),
 };
 
-export const listIncomesQuerySchema = paginationQuerySchema;
+export const listIncomesQuerySchema = idCursorPaginationQuerySchema;
 
 export type CreateIncomeDto = z.infer<typeof createIncomeSchema.body>;
 export type UpdateIncomeDto = z.infer<typeof updateIncomeSchema.body>;

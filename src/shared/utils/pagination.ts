@@ -14,6 +14,16 @@ export const paginationQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+/**
+ * Same as `paginationQuerySchema`, for listings whose cursor is a row id.
+ * Validating it here turns a garbage cursor into a 422; left as a free string
+ * it reaches Postgres as a malformed uuid and comes back as a 500. (The
+ * activity feed has its own opaque cursor and keeps the loose schema.)
+ */
+export const idCursorPaginationQuerySchema = paginationQuerySchema.extend({
+  cursor: z.string().uuid().optional(),
+});
+
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 
 export interface PaginationParams {

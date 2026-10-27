@@ -1,10 +1,19 @@
 import { z } from 'zod';
+import { textSchema } from '../../shared/validation/text.schema.js';
+
+// The avatar is rendered by clients as an image/link; any other scheme
+// (`javascript:`, `data:`) would be a script-injection vector.
+const avatarUrl = z
+  .string()
+  .max(2048)
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), 'Must be an http(s) URL');
 
 export const updateUserSchema = {
   body: z
     .object({
-      displayName: z.string().min(1).max(100),
-      avatarUrl: z.string().url().max(2048),
+      displayName: textSchema(100),
+      avatarUrl,
       preferredCurrencyCode: z.string().length(3).toUpperCase(),
     })
     .partial()
