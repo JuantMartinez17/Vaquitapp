@@ -583,6 +583,8 @@ Pendientes conocidos, con su ticket implícito:
 - **Sin envío de emails**: la invitación devuelve el `token` y el link se comparte a mano.
   Tampoco hay verificación de email ni recuperación de contraseña.
 - **Sin multi-moneda real**: la tabla `exchange_rates` existe pero no se usa.
+- **Zona horaria del hogar**: `households.timezone` se guarda pero todavía no se usa; el job de
+  gastos recurrentes calcula "hoy" en UTC.
 - Los rate limiters usan un **store en memoria**: sirven mientras la app corra en una sola
   instancia. Escalar horizontalmente requiere un store compartido (y el scheduler, un solo
   responsable).
