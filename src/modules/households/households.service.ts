@@ -1,7 +1,13 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
-import { BadRequestError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
-import type { Household, MemberRole } from '../../generated/prisma/client.js';
+import type { Household, MemberRole, Prisma } from '../../generated/prisma/client.js';
+import { getMemberNet } from '../balances/balances.service.js';
 import { MEMBER_INCLUDE, toHouseholdDto, toMemberDto } from './households.mapper.js';
 import type { HouseholdDto, MemberDto } from './households.mapper.js';
 import type { CreateHouseholdDto, UpdateHouseholdDto } from './households.schema.js';
@@ -98,6 +104,39 @@ export const getHousehold = async (
   return toHouseholdDto(household, { role, memberCount: await countActiveMembers(householdId) });
 };
 
+/**
+ * Serializes concurrent membership and settings changes on one household by
+ * taking its row lock for the rest of the transaction. Callers must pass the
+ * interactive-transaction client so the lock lives as long as their checks.
+ */
+export const lockHousehold = async (
+  tx: Prisma.TransactionClient,
+  householdId: string,
+): Promise<void> => {
+  await tx.$queryRaw`SELECT "id" FROM "households" WHERE "id" = ${householdId}::uuid FOR UPDATE`;
+};
+
+/**
+ * Any financial record, voided or soft-deleted included, pins the currency:
+ * amounts are stored without a conversion, so changing the default
+ * afterwards would silently reinterpret history.
+ */
+const hasFinancialActivity = async (
+  tx: Prisma.TransactionClient,
+  householdId: string,
+): Promise<boolean> => {
+  const [row] = await tx.$queryRaw<{ locked: boolean }[]>`
+    SELECT (
+      EXISTS (SELECT 1 FROM "expenses" WHERE "household_id" = ${householdId}::uuid)
+      OR EXISTS (SELECT 1 FROM "settlements" WHERE "household_id" = ${householdId}::uuid)
+      OR EXISTS (SELECT 1 FROM "incomes" WHERE "household_id" = ${householdId}::uuid)
+      OR EXISTS (SELECT 1 FROM "transfers" WHERE "household_id" = ${householdId}::uuid)
+      OR EXISTS (SELECT 1 FROM "recurring_expenses" WHERE "household_id" = ${householdId}::uuid)
+    ) AS locked
+  `;
+  return row?.locked ?? false;
+};
+
 export const updateHousehold = async (
   householdId: string,
   dto: UpdateHouseholdDto,
@@ -105,7 +144,25 @@ export const updateHousehold = async (
   if (dto.defaultCurrencyCode) {
     await assertCurrencyExists(dto.defaultCurrencyCode);
   }
-  const household = await prisma.household.update({ where: { id: householdId }, data: dto });
+  const household = await prisma.$transaction(async (tx) => {
+    await lockHousehold(tx, householdId);
+    if (dto.defaultCurrencyCode) {
+      const current = await tx.household.findUniqueOrThrow({
+        where: { id: householdId },
+        select: { defaultCurrencyCode: true },
+      });
+      if (
+        current.defaultCurrencyCode !== dto.defaultCurrencyCode &&
+        (await hasFinancialActivity(tx, householdId))
+      ) {
+        throw new ConflictError(
+          'The currency cannot change once the household has financial activity',
+          ErrorCode.HOUSEHOLD_CURRENCY_LOCKED,
+        );
+      }
+    }
+    return tx.household.update({ where: { id: householdId }, data: dto });
+  });
   return toHouseholdDto(household, { memberCount: await countActiveMembers(householdId) });
 };
 
@@ -122,65 +179,90 @@ export const listMembers = async (householdId: string): Promise<MemberDto[]> => 
   return members.map(toMemberDto);
 };
 
-export const removeMember = async (householdId: string, targetUserId: string): Promise<void> => {
-  const member = await prisma.householdMember.findFirst({
-    where: { householdId, userId: targetUserId, leftAt: null },
+/**
+ * Counted under the household lock, so two concurrent removals or demotions
+ * cannot both observe "another admin remains".
+ */
+const assertNotLastAdmin = async (
+  tx: Prisma.TransactionClient,
+  householdId: string,
+): Promise<void> => {
+  const adminCount = await tx.householdMember.count({
+    where: { householdId, role: 'admin', leftAt: null },
   });
-  if (!member) {
-    throw new NotFoundError('The user is not a member of the household', ErrorCode.NOT_A_MEMBER);
+  if (adminCount <= 1) {
+    throw new ConflictError('The household needs at least one admin', ErrorCode.LAST_ADMIN);
   }
+};
 
-  if (member.role === 'admin') {
-    const adminCount = await prisma.householdMember.count({
-      where: { householdId, role: 'admin', leftAt: null },
+/**
+ * Marks a member as having left. The row is kept because their past
+ * expenses and settlements still reference them. A non-zero net balance
+ * blocks it: the money they owe or are owed would have no one to settle
+ * with. Pending recurring occurrences are not facts and do not count.
+ */
+const deactivateMember = async (householdId: string, targetUserId: string): Promise<void> => {
+  await prisma.$transaction(async (tx) => {
+    await lockHousehold(tx, householdId);
+
+    const member = await tx.householdMember.findFirst({
+      where: { householdId, userId: targetUserId, leftAt: null },
+      select: { id: true, role: true },
     });
-    if (adminCount <= 1) {
-      throw new BadRequestError(
-        'Cannot remove the last admin of the household',
-        ErrorCode.LAST_ADMIN,
+    if (!member) {
+      throw new NotFoundError('The user is not a member of the household', ErrorCode.NOT_A_MEMBER);
+    }
+    if (member.role === 'admin') {
+      await assertNotLastAdmin(tx, householdId);
+    }
+
+    const net = await getMemberNet(tx, householdId, targetUserId);
+    if (!net.isZero()) {
+      throw new ConflictError(
+        'The member has an open balance and must settle up first',
+        ErrorCode.MEMBER_HAS_OPEN_BALANCE,
+        { net: net.toFixed() },
       );
     }
-  }
 
-  await prisma.householdMember.update({
-    where: { id: member.id },
-    data: { leftAt: new Date() },
+    await tx.householdMember.update({ where: { id: member.id }, data: { leftAt: new Date() } });
   });
 };
 
-export const changeMemberRole = async (
+/** Admin-initiated removal of a member (possibly the admin themselves). */
+export const removeMember = (householdId: string, targetUserId: string): Promise<void> =>
+  deactivateMember(householdId, targetUserId);
+
+/** Self-service exit; the route already confirmed an active membership. */
+export const leaveHousehold = (householdId: string, userId: string): Promise<void> =>
+  deactivateMember(householdId, userId);
+
+export const changeMemberRole = (
   householdId: string,
   targetUserId: string,
   role: MemberRole,
-): Promise<MemberDto> => {
-  const member = await prisma.householdMember.findFirst({
-    where: { householdId, userId: targetUserId, leftAt: null },
-    include: MEMBER_INCLUDE,
-  });
-  if (!member) {
-    throw new NotFoundError('The user is not a member of the household', ErrorCode.NOT_A_MEMBER);
-  }
+): Promise<MemberDto> =>
+  prisma.$transaction(async (tx) => {
+    await lockHousehold(tx, householdId);
 
-  if (member.role === 'admin' && role === 'member') {
-    const adminCount = await prisma.householdMember.count({
-      where: { householdId, role: 'admin', leftAt: null },
+    const member = await tx.householdMember.findFirst({
+      where: { householdId, userId: targetUserId, leftAt: null },
+      include: MEMBER_INCLUDE,
     });
-    if (adminCount <= 1) {
-      throw new BadRequestError(
-        'Cannot leave the household without an admin',
-        ErrorCode.LAST_ADMIN,
-      );
+    if (!member) {
+      throw new NotFoundError('The user is not a member of the household', ErrorCode.NOT_A_MEMBER);
     }
-  }
+    if (member.role === role) {
+      return toMemberDto(member);
+    }
+    if (member.role === 'admin') {
+      await assertNotLastAdmin(tx, householdId);
+    }
 
-  if (member.role === role) {
-    return toMemberDto(member);
-  }
-
-  const updated = await prisma.householdMember.update({
-    where: { id: member.id },
-    data: { role },
-    include: MEMBER_INCLUDE,
+    const updated = await tx.householdMember.update({
+      where: { id: member.id },
+      data: { role },
+      include: MEMBER_INCLUDE,
+    });
+    return toMemberDto(updated);
   });
-  return toMemberDto(updated);
-};

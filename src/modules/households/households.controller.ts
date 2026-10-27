@@ -34,6 +34,11 @@ export const removeMember = asyncHandler(async (req, res) => {
   res.status(204).send();
 });
 
+export const leave = asyncHandler(async (req, res) => {
+  await householdsService.leaveHousehold(routeParam(req, 'householdId'), req.user!.id);
+  res.status(204).send();
+});
+
 export const updateMemberRole = asyncHandler(async (req, res) => {
   res.json(
     await householdsService.changeMemberRole(
