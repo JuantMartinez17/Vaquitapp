@@ -184,9 +184,9 @@ logger.info({ userId, householdId, expenseId, operation: 'expense.create' }, 'ex
 console.log('Gasto creado ' + expenseId);
 ```
 
-Las únicas excepciones —y están declaradas en `eslint.config.js`— son
-[`src/app/config.ts`](src/app/config.ts) (falla antes de que exista el logger) y
-[`src/server.ts`](src/server.ts) (arranque y apagado). Los scripts de `prisma/` tampoco son
+La única excepción —declarada en `eslint.config.js`— es
+[`src/app/config.ts`](src/app/config.ts) (falla antes de que exista el logger).
+[`src/server.ts`](src/server.ts) ya loguea por pino. Los scripts de `prisma/` tampoco son
 código de aplicación.
 
 **Nunca loguees**: passwords, tokens (access o refresh), hashes, ni contenido de comprobantes.
