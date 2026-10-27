@@ -5,7 +5,7 @@ import { ErrorCode } from '../../shared/errors/codes.js';
 import { isUniqueConstraintViolation } from '../../infrastructure/database/prisma-errors.js';
 import { toCreatedInvitationDto, toInvitationDto } from './invitations.mapper.js';
 import type { CreatedInvitationDto, InvitationDto } from './invitations.mapper.js';
-import { toMemberDto } from '../households/households.mapper.js';
+import { MEMBER_INCLUDE, toMemberDto } from '../households/households.mapper.js';
 import type { MemberDto } from '../households/households.mapper.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -26,6 +26,7 @@ export const createInvitation = async (
 
   const invitedUser = await prisma.user.findFirst({
     where: { email: invitedEmail, deletedAt: null },
+    select: { id: true },
   });
 
   try {
@@ -148,11 +149,11 @@ export const acceptInvitation = async (
         ? await tx.householdMember.update({
             where: { id: existing.id },
             data: { leftAt: null, role: 'member', joinedAt: new Date() },
-            include: { user: true },
+            include: MEMBER_INCLUDE,
           })
         : await tx.householdMember.create({
             data: { householdId: invitation.householdId, userId: user.id, role: 'member' },
-            include: { user: true },
+            include: MEMBER_INCLUDE,
           });
     } catch (error) {
       if (isUniqueConstraintViolation(error)) {
