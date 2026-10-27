@@ -130,7 +130,7 @@ const loadHouseholdWithCurrency = async (
 ) => {
   const household = await db.household.findFirst({
     where: { id: householdId, deletedAt: null },
-    include: { defaultCurrency: true },
+    include: { defaultCurrency: { select: { decimalPlaces: true } } },
   });
   if (!household) {
     throw new NotFoundError('Household not found', ErrorCode.HOUSEHOLD_NOT_FOUND);
