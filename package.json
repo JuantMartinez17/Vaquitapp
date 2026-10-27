@@ -21,6 +21,8 @@
     "test:integration": "node --import ./scripts/test-env.mjs --import tsx --test \"src/**/*.itest.ts\"",
     "test:watch": "node --import ./scripts/test-env.mjs --import tsx --test --watch \"src/**/*.test.ts\"",
     "test:coverage": "node --import ./scripts/test-env.mjs --import tsx --test --experimental-test-coverage \"src/**/*.test.ts\" \"src/**/*.itest.ts\"",
+    "openapi:export": "tsx scripts/export-openapi.ts",
+    "openapi:check": "tsx scripts/export-openapi.ts --check",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",

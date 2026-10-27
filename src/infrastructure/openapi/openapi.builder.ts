@@ -331,7 +331,8 @@ const HEADER_COMPONENTS: Record<string, JsonSchema> = {
     schema: { type: 'string' },
   },
   'Retry-After': {
-    description: 'Seconds to wait before retrying.',
+    description:
+      'Seconds to wait before retrying. Sent with 429, 503 and 409 `IDEMPOTENCY_KEY_IN_PROGRESS`.',
     schema: { type: 'integer', minimum: 0 },
   },
   'Idempotency-Replayed': {
