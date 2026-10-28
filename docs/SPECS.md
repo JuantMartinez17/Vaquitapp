@@ -1642,7 +1642,7 @@ The following items had to be explicitly resolved during domain-design before fr
 13. Notification mechanism for recurring expenses. **Decided:** none in the MVP (no push, no email); the client polls `GET .../recurring-expenses/upcoming`.
 14. Exact category ownership model: global, household-specific, or both. **Decided:** both; an immutable global system catalog plus per-household categories managed by its admins, and a household sees the union.
 15. Whether a financial activity can be reassigned between households. **Decided:** no; `householdId` is immutable, and a mistake is fixed by voiding and recreating.
-16. Time-zone rules for dates and recurring schedules. **Decided:** business dates are civil `DATE`s without time, system timestamps are UTC, and `Household.timezone` is stored for recurring schedules (today the generation job still uses the UTC date).
+16. Time-zone rules for dates and recurring schedules. **Decided:** business dates are civil `DATE`s without time, system timestamps are UTC, and `Household.timezone` is stored for recurring schedules (the generation job and `/upcoming` compute "today" in that zone, falling back to UTC for an unrecognized name).
 17. API versioning policy. **Decided:** `/api/v1` in the URL; a new major version only for a real breaking change, additive changes do not bump it.
 18. Production backup/recovery strategy. **Decided:** managed backups of the production database (Neon) plus a documented restore drill (`docs/runbooks/restore-drill.md`); the drill has been run locally and must be repeated against Neon before go-live.
 

@@ -4,6 +4,7 @@ import { logger } from '../../infrastructure/logging/logger.js';
 import { NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
+import { civilDateInZone, latestCivilDateAnywhere } from '../../domain/calendar/civil-today.js';
 import { advanceDate, dueDates } from '../../domain/recurrence/schedule.js';
 import {
   assertHouseholdActive,
@@ -26,7 +27,19 @@ import type {
   UpdateRecurringExpenseDto,
 } from './recurring-expenses.schema.js';
 
-const civilDateToday = (): Date => new Date(new Date().toISOString().slice(0, 10));
+/**
+ * Today's civil date as the household's wall clock shows it. A zone the
+ * runtime cannot resolve falls back to UTC (logged) rather than failing the
+ * request or silently skipping the household's templates.
+ */
+const householdToday = (timeZone: string, now: Date): Date => {
+  try {
+    return civilDateInZone(now, timeZone);
+  } catch {
+    logger.warn({ timeZone }, 'unknown household time zone, falling back to UTC');
+    return civilDateInZone(now, 'UTC');
+  }
+};
 
 export const createRecurringExpense = async (
   userId: string,
@@ -119,13 +132,19 @@ export const listRecurringExpenses = async (
   return rows.map(toRecurringExpenseDto);
 };
 
-export const getUpcoming = async (householdId: string): Promise<UpcomingRecurringExpenseDto[]> => {
-  const rows = await prisma.recurringExpense.findMany({
-    where: { householdId, deletedAt: null, isActive: true },
-    include: RECURRING_EXPENSE_INCLUDE,
-    orderBy: { nextRunDate: 'asc' },
-  });
-  const today = civilDateToday();
+export const getUpcoming = async (
+  householdId: string,
+  now: Date = new Date(),
+): Promise<UpcomingRecurringExpenseDto[]> => {
+  const [household, rows] = await Promise.all([
+    prisma.household.findUniqueOrThrow({ where: { id: householdId }, select: { timezone: true } }),
+    prisma.recurringExpense.findMany({
+      where: { householdId, deletedAt: null, isActive: true },
+      include: RECURRING_EXPENSE_INCLUDE,
+      orderBy: { nextRunDate: 'asc' },
+    }),
+  ]);
+  const today = householdToday(household.timezone, now);
   return rows.map((r) => toUpcomingDto(r, today));
 };
 
@@ -196,6 +215,7 @@ const TEMPLATE_BATCH_SIZE = 100;
 const DUE_TEMPLATE_SELECT = {
   id: true,
   householdId: true,
+  household: { select: { timezone: true } },
   categoryId: true,
   paidBy: true,
   createdBy: true,
@@ -334,18 +354,34 @@ const generateForTemplate = async (recurring: DueTemplate, today: Date): Promise
  * are due; a failing template cannot starve the rest because the cursor
  * always moves forward.
  *
+ * `now` is an instant, not a date: each household's "today" is the civil
+ * date its time zone shows at `now`.
+ *
  * Returns the number of occurrences actually created.
  */
-export const generateDueOccurrences = async (today: Date = civilDateToday()): Promise<number> => {
+export const generateDueOccurrences = async (now: Date = new Date()): Promise<number> => {
   let generated = 0;
   let afterId: string | undefined;
+  // "Today" is the household's civil date, so it differs per zone. The query
+  // only prefilters with the latest date on Earth; each template is then
+  // judged against its own household's date.
+  const latestToday = latestCivilDateAnywhere(now);
+  const todayByZone = new Map<string, Date>();
+  const todayIn = (timeZone: string): Date => {
+    let today = todayByZone.get(timeZone);
+    if (!today) {
+      today = householdToday(timeZone, now);
+      todayByZone.set(timeZone, today);
+    }
+    return today;
+  };
 
   for (;;) {
     const batch = await prisma.recurringExpense.findMany({
       where: {
         isActive: true,
         deletedAt: null,
-        nextRunDate: { lte: today },
+        nextRunDate: { lte: latestToday },
         ...(afterId ? { id: { gt: afterId } } : {}),
       },
       orderBy: { id: 'asc' },
@@ -354,6 +390,10 @@ export const generateDueOccurrences = async (today: Date = civilDateToday()): Pr
     });
 
     for (const recurring of batch) {
+      const today = todayIn(recurring.household.timezone);
+      if (recurring.nextRunDate.getTime() > today.getTime()) {
+        continue; // not due yet where this household lives
+      }
       try {
         generated += await generateForTemplate(recurring, today);
       } catch (error) {
