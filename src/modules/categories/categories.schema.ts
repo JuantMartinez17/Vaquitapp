@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { textSchema } from '../../shared/validation/text.schema.js';
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
@@ -16,8 +17,8 @@ export const createCategorySchema = {
   params: householdId,
   body: z
     .object({
-      name: z.string().min(1).max(50),
-      icon: z.string().max(50).optional(),
+      name: textSchema(50),
+      icon: textSchema(50, 0).optional(),
       color: z.string().regex(HEX_COLOR).optional(),
     })
     .strict(),
@@ -27,8 +28,8 @@ export const updateCategorySchema = {
   params: categoryParam,
   body: z
     .object({
-      name: z.string().min(1).max(50),
-      icon: z.string().max(50).nullable(),
+      name: textSchema(50),
+      icon: textSchema(50, 0).nullable(),
       color: z.string().regex(HEX_COLOR).nullable(),
     })
     .partial()

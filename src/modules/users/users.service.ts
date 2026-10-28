@@ -21,7 +21,13 @@ export const updateUser = async (id: string, data: UpdateUserDto) => {
   }
 
   // Make sure the user exists and isn't deleted before updating.
-  await getUserById(id);
+  const existing = await prisma.user.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true },
+  });
+  if (!existing) {
+    throw new NotFoundError('User not found');
+  }
 
   return prisma.user.update({ where: { id }, data });
 };

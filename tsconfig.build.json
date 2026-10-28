@@ -1,0 +1,7 @@
+{
+  // Production build only: tests and their helpers (supertest is a
+  // devDependency) must not ship. `tsconfig.json` keeps including them so
+  // `npm run typecheck` and ESLint's type-aware rules still cover tests.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.itest.ts", "src/shared/testing"]
+}

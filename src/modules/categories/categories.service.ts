@@ -1,6 +1,7 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { toCategoryDto } from './categories.mapper.js';
 import type { CategoryDto } from './categories.mapper.js';
 import type { CreateCategoryDto, UpdateCategoryDto } from './categories.schema.js';
@@ -45,8 +46,9 @@ export const createCategory = async (
 export const assertValidCategory = async (
   householdId: string,
   categoryId: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<void> => {
-  const category = await prisma.category.findFirst({
+  const category = await db.category.findFirst({
     where: { id: categoryId, deletedAt: null, OR: [{ isSystem: true }, { householdId }] },
   });
   if (!category) {

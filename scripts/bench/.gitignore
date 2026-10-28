@@ -1,0 +1,3 @@
+# Seeded credentials/ids and per-run results are machine-local artifacts.
+.state.json
+results/

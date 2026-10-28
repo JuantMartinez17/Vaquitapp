@@ -1,10 +1,12 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { formatMoney } from '../../domain/money/money.js';
 
+// Narrow `select`s on purpose: a bare `true` would load whole User rows
+// (password hash included) just to read a display name.
 export const SETTLEMENT_INCLUDE = {
-  from: true,
-  to: true,
-  currency: true,
+  from: { select: { id: true, displayName: true } },
+  to: { select: { id: true, displayName: true } },
+  currency: { select: { decimalPlaces: true } },
 } satisfies Prisma.SettlementInclude;
 
 export type SettlementWithRelations = Prisma.SettlementGetPayload<{

@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { civilDateSchema } from '../../shared/validation/civil-date.schema.js';
 
-const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RANGE_DAYS = 366;
 
 const householdId = z.object({ householdId: z.string().uuid() });
@@ -9,8 +9,8 @@ const householdId = z.object({ householdId: z.string().uuid() });
 // explicit, capped date range.
 const dateRange = z
   .object({
-    from: z.string().regex(CIVIL_DATE),
-    to: z.string().regex(CIVIL_DATE),
+    from: civilDateSchema,
+    to: civilDateSchema,
   })
   .refine((v) => new Date(v.from).getTime() <= new Date(v.to).getTime(), {
     message: 'from must not be after to',

@@ -42,4 +42,9 @@ describe('dueDates', () => {
     const dates = dueDates(d('2026-06-01'), d('2026-06-04'), 'daily');
     assert.deepEqual(dates.map(iso), ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04']);
   });
+
+  it('stops at the limit instead of walking the whole backlog', () => {
+    const dates = dueDates(d('2020-01-01'), d('2026-06-04'), 'daily', undefined, 3);
+    assert.deepEqual(dates.map(iso), ['2020-01-01', '2020-01-02', '2020-01-03']);
+  });
 });

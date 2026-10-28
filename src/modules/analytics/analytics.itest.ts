@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
+import { Decimal } from 'decimal.js';
 import { app } from '../../app/app.js';
 import { prisma } from '../../infrastructure/database/prisma.js';
 import { registerTestUser, createTestHousehold, addTestMember } from '../../shared/testing/http.js';
@@ -22,6 +23,18 @@ describe('analytics', () => {
         '/api/v1/households/00000000-0000-0000-0000-000000000000/analytics/summary?from=2026-01-01&to=2026-01-31',
       )
       .expect(401);
+  });
+
+  it('rejects a date that is not on the calendar instead of rolling it over', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+
+    for (const range of ['from=2026-02-31&to=2026-03-31', 'from=2026-02-01&to=2026-02-30']) {
+      const res = await authed(admin.accessToken)(
+        request(app).get(`/api/v1/households/${householdId}/analytics/summary?${range}`),
+      ).expect(422);
+      assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+    }
   });
 
   it('rejects a missing or inverted date range', async () => {
@@ -161,5 +174,149 @@ describe('analytics', () => {
     // The previous 31-day period (2026-01-29 .. 2026-02-28) includes none of
     // the fixtures above.
     assert.equal(comparison.body.previous.totalSpent, '0.00');
+  });
+});
+
+describe('analytics output stays exact', () => {
+  const createExpense = async (
+    admin: Awaited<ReturnType<typeof registerTestUser>>,
+    householdId: string,
+    body: Record<string, unknown>,
+  ): Promise<void> => {
+    await authed(admin.accessToken)(request(app).post(`/api/v1/households/${householdId}/expenses`))
+      .send({ currencyCode: 'ARS', splitType: 'equal', paidBy: admin.id, ...body })
+      .expect(201);
+  };
+
+  it('buckets over-time by week and month on calendar boundaries', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const participants = [{ userId: admin.id }];
+    // 2026-03-04 is a Wednesday, so its ISO week starts Monday 2026-03-02.
+    for (const [expenseDate, amount] of [
+      ['2026-03-04', '10.00'],
+      ['2026-03-10', '20.00'],
+      ['2026-03-12', '5.50'],
+      ['2026-04-02', '7.25'],
+    ] as const) {
+      await createExpense(admin, householdId, {
+        description: 'x',
+        amount,
+        expenseDate,
+        participants,
+      });
+    }
+    const overTime = async (granularity: string) => {
+      const res = await authed(admin.accessToken)(
+        request(app).get(
+          `/api/v1/households/${householdId}/analytics/over-time?from=2026-03-01&to=2026-04-30&granularity=${granularity}`,
+        ),
+      ).expect(200);
+      return res.body as { date: string; totalSpent: string }[];
+    };
+
+    assert.deepEqual(await overTime('week'), [
+      { date: '2026-03-02', totalSpent: '10.00' },
+      { date: '2026-03-09', totalSpent: '25.50' },
+      { date: '2026-03-30', totalSpent: '7.25' },
+    ]);
+    assert.deepEqual(await overTime('month'), [
+      { date: '2026-03-01', totalSpent: '35.50' },
+      { date: '2026-04-01', totalSpent: '7.25' },
+    ]);
+  });
+
+  it('by-member matches the stored splits, ordered by total and then by user id', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const bea = await addTestMember(app, admin, householdId);
+    const carl = await addTestMember(app, admin, householdId);
+    const everyone = [admin, bea, carl];
+
+    // 100.00 / 3 leaves a remainder, so the three shares differ by a cent.
+    await createExpense(admin, householdId, {
+      description: 'thirds',
+      amount: '100.00',
+      expenseDate: '2026-03-05',
+      participants: everyone.map((u) => ({ userId: u.id })),
+    });
+    await createExpense(admin, householdId, {
+      description: 'duo',
+      amount: '40.00',
+      expenseDate: '2026-03-06',
+      participants: [admin, bea].map((u) => ({ userId: u.id })),
+    });
+    await createExpense(admin, householdId, {
+      description: 'outside the range',
+      amount: '500.00',
+      expenseDate: '2026-05-06',
+      participants: everyone.map((u) => ({ userId: u.id })),
+    });
+
+    const splits = await prisma.expenseSplit.findMany({
+      where: { expense: { householdId, expenseDate: { lt: new Date('2026-04-01') } } },
+    });
+    const expected = new Map<string, Decimal>();
+    for (const split of splits) {
+      expected.set(split.userId, (expected.get(split.userId) ?? new Decimal(0)).plus(split.amount));
+    }
+
+    const res = await authed(admin.accessToken)(
+      request(app).get(
+        `/api/v1/households/${householdId}/analytics/by-member?from=2026-03-01&to=2026-03-31`,
+      ),
+    ).expect(200);
+    const rows = res.body as { userId: string; displayName: string | null; totalSpent: string }[];
+
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      assert.equal(row.totalSpent, expected.get(row.userId)!.toFixed(2));
+      assert.equal(row.displayName, 'Test User');
+    }
+    const keys = rows.map((r) => [new Decimal(r.totalSpent), r.userId] as const);
+    for (let index = 1; index < keys.length; index += 1) {
+      const [previousTotal, previousId] = keys[index - 1]!;
+      const [total, id] = keys[index]!;
+      assert.ok(
+        previousTotal.gt(total) || (previousTotal.eq(total) && previousId < id),
+        'ordered by total desc, ties by user id',
+      );
+    }
+  });
+
+  it('comparison equals two independent summaries of the adjacent periods', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+    const participants = [{ userId: admin.id }];
+    await createExpense(admin, householdId, {
+      description: 'current',
+      amount: '30.00',
+      expenseDate: '2026-03-15',
+      participants,
+    });
+    await createExpense(admin, householdId, {
+      description: 'previous',
+      amount: '12.50',
+      expenseDate: '2026-02-20',
+      participants,
+    });
+    const get = async (path: string) =>
+      (
+        await authed(admin.accessToken)(
+          request(app).get(`/api/v1/households/${householdId}/${path}`),
+        ).expect(200)
+      ).body;
+
+    const comparison = await get('analytics/comparison?from=2026-03-01&to=2026-03-31');
+    // 31 days ending the day before the range starts.
+    assert.deepEqual(
+      comparison.current,
+      await get('analytics/summary?from=2026-03-01&to=2026-03-31'),
+    );
+    assert.deepEqual(
+      comparison.previous,
+      await get('analytics/summary?from=2026-01-29&to=2026-02-28'),
+    );
+    assert.equal(comparison.previous.totalSpent, '12.50');
   });
 });

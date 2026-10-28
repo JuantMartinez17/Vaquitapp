@@ -44,6 +44,14 @@ householdsRouter.get(
   requireHouseholdMember(),
   householdsController.listMembers,
 );
+// POST `leave` cannot be captured by `/members/:userId`, which only serves
+// DELETE and PATCH.
+householdsRouter.post(
+  '/:householdId/members/leave',
+  validate(householdIdParam),
+  requireHouseholdMember(),
+  householdsController.leave,
+);
 householdsRouter.delete(
   '/:householdId/members/:userId',
   validate(memberParam),

@@ -131,6 +131,7 @@ model RefreshToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([expiresAt])
   @@map("refresh_tokens")
 }
 
@@ -208,7 +209,7 @@ model Invitation {
   invitedUser User?     @relation("InvitationInvitee", fields: [invitedUserId], references: [id])
 
   @@index([householdId], map: "invitations_group_id_idx")
-  @@index([invitedEmail])
+  @@index([invitedEmail, status])
   @@map("invitations")
 }
 
@@ -307,7 +308,9 @@ model Expense {
   attachments      ExpenseAttachment[]
 
   @@unique([recurringExpenseId, expenseDate])
-  @@index([householdId, expenseDate(sort: Desc)], map: "expenses_group_id_expense_date_idx")
+  @@index([householdId, status, expenseDate(sort: Desc), id(sort: Desc)])
+  @@index([householdId, expenseDate(sort: Desc), id(sort: Desc)])
+  @@index([householdId, status, paidBy])
   @@index([categoryId])
   @@index([paidBy])
   @@map("expenses")
@@ -325,7 +328,7 @@ model ExpenseSplit {
   user    User    @relation(fields: [userId], references: [id])
 
   @@unique([expenseId, userId])
-  @@index([userId])
+  @@index([userId, expenseId])
   @@map("expense_splits")
 }
 
@@ -363,6 +366,7 @@ model RecurringExpense {
   generatedExpenses Expense[]
 
   @@index([nextRunDate])
+  @@index([householdId, deletedAt, nextRunDate])
   @@map("recurring_expenses")
 }
 
@@ -430,7 +434,7 @@ model Settlement {
   creator   User      @relation("SettlementCreator", fields: [createdBy], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
 
-  @@index([householdId, settlementDate(sort: Desc)], map: "settlements_group_id_settlement_date_idx")
+  @@index([householdId, settlementDate(sort: Desc), id(sort: Desc)])
   @@map("settlements")
 }
 
@@ -462,7 +466,7 @@ model Income {
   category  Category? @relation(fields: [categoryId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
 
-  @@index([householdId, incomeDate(sort: Desc)])
+  @@index([householdId, incomeDate(sort: Desc), id(sort: Desc)])
   @@map("incomes")
 }
 
@@ -485,6 +489,6 @@ model Transfer {
   creator   User      @relation("TransferCreator", fields: [createdBy], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
 
-  @@index([householdId, transferDate(sort: Desc)])
+  @@index([householdId, transferDate(sort: Desc), id(sort: Desc)])
   @@map("transfers")
 }

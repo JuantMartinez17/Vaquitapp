@@ -2,14 +2,19 @@
 
 Goal: prove that a Vaquitapp database backup can actually be restored, and
 that nobody is discovering how to do it for the first time during a real
-incident. Render manages the backups themselves (daily, 7-day retention, per
-`render.yaml`'s managed Postgres); this runbook covers restoring one.
+incident.
+
+> **Status: the production database will be Neon, not Render Postgres.** The
+> "production restore" procedure below was written for Render's managed
+> Postgres and **does not apply as-is** to Neon. Only the local drill has been
+> run so far. Redo the drill against Neon before go-live — see
+> [Before go-live (Neon)](#before-go-live-neon).
 
 Run this drill whenever the schema changes meaningfully (a new required
 table, a changed backup/restore-relevant extension) and at least once before
 any release considered MVP-complete — not on every deploy.
 
-## Procedure — production restore (Render)
+## Procedure — production restore (Render managed Postgres, superseded by Neon)
 
 1. In the Render dashboard, open the target Postgres instance → **Backups**.
 2. Pick the backup to restore (point-in-time or a daily snapshot) and choose
@@ -47,6 +52,27 @@ docker exec vaquitapp-postgres rm /tmp/vaquitapp_drill.dump
 (On Windows Git Bash, prefix the `docker exec` calls with `MSYS_NO_PATHCONV=1`
 — otherwise Git Bash rewrites `/tmp/...` into a Windows host path before it
 ever reaches the container.)
+
+## Before go-live (Neon)
+
+TODO checklist — none of this has been done yet, and the Neon-specific details
+(retention window, how point-in-time restore or branching is exposed, limits of
+the free plan) must be read from Neon's current documentation rather than
+assumed:
+
+- [ ] Find out which backup / point-in-time restore options the Neon plan in
+      use actually includes, and how far back they reach. Write it down here.
+- [ ] Restore a Neon backup (or point in time) into a **new** database or
+      branch, never over the live one.
+- [ ] Point a throwaway copy of the API at the restored database, using the
+      same kind of connection string the real service uses.
+- [ ] Run every check in [Verification](#verification): row counts, content
+      checksum, migration history, and `GET /health/ready`.
+- [ ] Note that migrations run by hand against Neon's **direct** URL (the one
+      without `-pooler`); do the same when checking `prisma migrate status`
+      on the restored copy.
+- [ ] Record the run in the [Drill log](#drill-log) and update the production
+      procedure above so it describes Neon instead of Render.
 
 ## Verification
 

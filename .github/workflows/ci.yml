@@ -50,6 +50,10 @@ jobs:
 
       - run: npm run typecheck
 
+      # openapi.yaml is generated from the code; a stale copy means someone
+      # changed the API without running `npm run openapi:export`.
+      - run: npm run openapi:check
+
       - run: npx prisma migrate deploy
 
       # Reference data (currencies, system categories) is not part of the

@@ -1,10 +1,16 @@
 import { prisma } from '../../infrastructure/database/prisma.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 import { NotFoundError, ValidationError } from '../../shared/errors/errors.js';
 import { ErrorCode } from '../../shared/errors/codes.js';
 import { roundToCurrency } from '../../domain/money/money.js';
+import { civilDateInZone, latestCivilDateAnywhere } from '../../domain/calendar/civil-today.js';
 import { advanceDate, dueDates } from '../../domain/recurrence/schedule.js';
-import { assertHouseholdActive, assertActiveMembers } from '../households/households.service.js';
+import {
+  assertHouseholdActive,
+  assertActiveMembers,
+  lockHouseholdShared,
+} from '../households/households.service.js';
 import { assertValidCategory } from '../categories/categories.service.js';
 import { computeSplits, splitsToRows } from '../expenses/expenses.service.js';
 import {
@@ -21,80 +27,96 @@ import type {
   UpdateRecurringExpenseDto,
 } from './recurring-expenses.schema.js';
 
-const civilDateToday = (): Date => new Date(new Date().toISOString().slice(0, 10));
-
-const isUniqueConstraintViolation = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
+/**
+ * Today's civil date as the household's wall clock shows it. A zone the
+ * runtime cannot resolve falls back to UTC (logged) rather than failing the
+ * request or silently skipping the household's templates.
+ */
+const householdToday = (timeZone: string, now: Date): Date => {
+  try {
+    return civilDateInZone(now, timeZone);
+  } catch {
+    logger.warn({ timeZone }, 'unknown household time zone, falling back to UTC');
+    return civilDateInZone(now, 'UTC');
+  }
+};
 
 export const createRecurringExpense = async (
   userId: string,
   householdId: string,
   dto: CreateRecurringExpenseDto,
 ): Promise<RecurringExpenseDto> => {
-  const household = await assertHouseholdActive(householdId);
-  if (dto.currencyCode !== household.defaultCurrencyCode) {
-    throw new ValidationError(
-      `Currency must match the household's currency (${household.defaultCurrencyCode})`,
-      ErrorCode.INVALID_CURRENCY,
-    );
-  }
-  await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
-  await assertActiveMembers(
-    householdId,
-    dto.participants.map((p) => p.userId),
-    ErrorCode.INVALID_PARTICIPANT,
-  );
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
+  // One transaction from the lock to the insert, so the payer, participants and
+  // currency checked here are still the household's when the template lands.
+  const recurring = await prisma.$transaction(async (tx) => {
+    await lockHouseholdShared(tx, householdId);
 
-  const currency = await prisma.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
-  const amount = roundToCurrency(dto.defaultAmount, currency.decimalPlaces);
-  if (amount.lte(0)) {
-    throw new ValidationError('Amount must be greater than zero');
-  }
-
-  // Validate the split shape/invariants up front, using the same domain
-  // functions the generator will use later — a template that can never
-  // produce a valid split shouldn't be creatable in the first place.
-  computeSplits(
-    dto.splitType,
-    amount.toFixed(currency.decimalPlaces),
-    dto.participants,
-    currency.decimalPlaces,
-  );
-
-  const startDate = new Date(dto.startDate);
-  const dayOfMonth =
-    dto.dayOfMonth ?? (dto.frequency === 'monthly' ? startDate.getUTCDate() : undefined);
-
-  const recurring = await prisma.recurringExpense.create({
-    data: {
+    const household = await assertHouseholdActive(householdId, tx);
+    if (dto.currencyCode !== household.defaultCurrencyCode) {
+      throw new ValidationError(
+        `Currency must match the household's currency (${household.defaultCurrencyCode})`,
+        ErrorCode.INVALID_CURRENCY,
+      );
+    }
+    await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER, tx);
+    await assertActiveMembers(
       householdId,
-      categoryId: dto.categoryId ?? null,
-      paidBy: dto.paidBy,
-      description: dto.description,
-      defaultAmount: amount.toFixed(currency.decimalPlaces),
-      currencyCode: dto.currencyCode,
-      splitType: dto.splitType,
-      frequency: dto.frequency,
-      dayOfMonth: dayOfMonth ?? null,
-      startDate,
-      endDate: dto.endDate ? new Date(dto.endDate) : null,
-      nextRunDate: startDate,
-      createdBy: userId,
-      splits: {
-        createMany: {
-          data: dto.participants.map((p) => ({
-            userId: p.userId,
-            amount: p.amount ?? null,
-            percentage: p.percentage !== undefined ? p.percentage.toString() : null,
-            shares: p.shares ?? null,
-          })),
+      dto.participants.map((p) => p.userId),
+      ErrorCode.INVALID_PARTICIPANT,
+      tx,
+    );
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    const currency = await tx.currency.findUniqueOrThrow({ where: { code: dto.currencyCode } });
+    const amount = roundToCurrency(dto.defaultAmount, currency.decimalPlaces);
+    if (amount.lte(0)) {
+      throw new ValidationError('Amount must be greater than zero');
+    }
+
+    // Validate the split shape/invariants up front, using the same domain
+    // functions the generator will use later — a template that can never
+    // produce a valid split shouldn't be creatable in the first place.
+    computeSplits(
+      dto.splitType,
+      amount.toFixed(currency.decimalPlaces),
+      dto.participants,
+      currency.decimalPlaces,
+    );
+
+    const startDate = new Date(dto.startDate);
+    const dayOfMonth =
+      dto.dayOfMonth ?? (dto.frequency === 'monthly' ? startDate.getUTCDate() : undefined);
+
+    return tx.recurringExpense.create({
+      data: {
+        householdId,
+        categoryId: dto.categoryId ?? null,
+        paidBy: dto.paidBy,
+        description: dto.description,
+        defaultAmount: amount.toFixed(currency.decimalPlaces),
+        currencyCode: dto.currencyCode,
+        splitType: dto.splitType,
+        frequency: dto.frequency,
+        dayOfMonth: dayOfMonth ?? null,
+        startDate,
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        nextRunDate: startDate,
+        createdBy: userId,
+        splits: {
+          createMany: {
+            data: dto.participants.map((p) => ({
+              userId: p.userId,
+              amount: p.amount ?? null,
+              percentage: p.percentage !== undefined ? p.percentage.toString() : null,
+              shares: p.shares ?? null,
+            })),
+          },
         },
       },
-    },
-    include: RECURRING_EXPENSE_INCLUDE,
+      include: RECURRING_EXPENSE_INCLUDE,
+    });
   });
   return toRecurringExpenseDto(recurring);
 };
@@ -110,13 +132,19 @@ export const listRecurringExpenses = async (
   return rows.map(toRecurringExpenseDto);
 };
 
-export const getUpcoming = async (householdId: string): Promise<UpcomingRecurringExpenseDto[]> => {
-  const rows = await prisma.recurringExpense.findMany({
-    where: { householdId, deletedAt: null, isActive: true },
-    include: RECURRING_EXPENSE_INCLUDE,
-    orderBy: { nextRunDate: 'asc' },
-  });
-  const today = civilDateToday();
+export const getUpcoming = async (
+  householdId: string,
+  now: Date = new Date(),
+): Promise<UpcomingRecurringExpenseDto[]> => {
+  const [household, rows] = await Promise.all([
+    prisma.household.findUniqueOrThrow({ where: { id: householdId }, select: { timezone: true } }),
+    prisma.recurringExpense.findMany({
+      where: { householdId, deletedAt: null, isActive: true },
+      include: RECURRING_EXPENSE_INCLUDE,
+      orderBy: { nextRunDate: 'asc' },
+    }),
+  ]);
+  const today = householdToday(household.timezone, now);
   return rows.map((r) => toUpcomingDto(r, today));
 };
 
@@ -136,23 +164,29 @@ export const updateRecurringExpense = async (
   dto: UpdateRecurringExpenseDto,
 ): Promise<RecurringExpenseDto> => {
   await loadOwnRecurringExpense(householdId, recurringExpenseId);
-  if (dto.paidBy) {
-    await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER);
-  }
-  if (dto.categoryId) {
-    await assertValidCategory(householdId, dto.categoryId);
-  }
 
-  const recurring = await prisma.recurringExpense.update({
-    where: { id: recurringExpenseId },
-    data: {
-      description: dto.description,
-      categoryId: dto.categoryId,
-      paidBy: dto.paidBy,
-      endDate: dto.endDate === undefined ? undefined : dto.endDate ? new Date(dto.endDate) : null,
-      isActive: dto.isActive,
-    },
-    include: RECURRING_EXPENSE_INCLUDE,
+  const recurring = await prisma.$transaction(async (tx) => {
+    // The payer judged below must still be a member when the edit lands.
+    await lockHouseholdShared(tx, householdId);
+
+    if (dto.paidBy) {
+      await assertActiveMembers(householdId, [dto.paidBy], ErrorCode.INVALID_PAYER, tx);
+    }
+    if (dto.categoryId) {
+      await assertValidCategory(householdId, dto.categoryId, tx);
+    }
+
+    return tx.recurringExpense.update({
+      where: { id: recurringExpenseId },
+      data: {
+        description: dto.description,
+        categoryId: dto.categoryId,
+        paidBy: dto.paidBy,
+        endDate: dto.endDate === undefined ? undefined : dto.endDate ? new Date(dto.endDate) : null,
+        isActive: dto.isActive,
+      },
+      include: RECURRING_EXPENSE_INCLUDE,
+    });
   });
   return toRecurringExpenseDto(recurring);
 };
@@ -169,99 +203,215 @@ export const deleteRecurringExpense = async (
 };
 
 /**
- * Materializes every overdue occurrence, across every household, as a
- * `pending` Expense (generate-recurring-occurrence.md). Safe to call any
- * number of times: the (recurringExpenseId, expenseDate) unique constraint
- * makes a repeat insert a no-op instead of a duplicate, and one recurring
- * expense's failure is logged and skipped rather than aborting the batch.
+ * Upper bounds on one run, so a long outage cannot turn into thousands of
+ * sequential round trips on a tiny instance. Leftover backlog is picked up
+ * by the next run, because `nextRunDate` only advances over what was created.
+ */
+const MAX_OCCURRENCES_PER_TEMPLATE_PER_RUN = 62;
+const TEMPLATE_BATCH_SIZE = 100;
+
+// Only what generation reads; the default `include` would also pull every
+// column of every split and the currency row.
+const DUE_TEMPLATE_SELECT = {
+  id: true,
+  householdId: true,
+  household: { select: { timezone: true } },
+  categoryId: true,
+  paidBy: true,
+  createdBy: true,
+  description: true,
+  defaultAmount: true,
+  currencyCode: true,
+  splitType: true,
+  frequency: true,
+  dayOfMonth: true,
+  endDate: true,
+  nextRunDate: true,
+  lastGeneratedDate: true,
+  currency: { select: { decimalPlaces: true } },
+  splits: { select: { userId: true, amount: true, percentage: true, shares: true } },
+} satisfies Prisma.RecurringExpenseSelect;
+
+type DueTemplate = Prisma.RecurringExpenseGetPayload<{ select: typeof DUE_TEMPLATE_SELECT }>;
+
+const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
+
+/**
+ * Creates one template's overdue occurrences (up to the per-run cap) and
+ * advances its schedule in the SAME transaction: a crash can never leave
+ * occurrences created with `nextRunDate` still pointing at them, nor the
+ * schedule moved past occurrences that do not exist.
+ *
+ * `skipDuplicates` (ON CONFLICT DO NOTHING) makes a re-run a no-op without
+ * a unique violation, which would abort the whole transaction.
  *
  * Returns the number of occurrences actually created.
  */
-export const generateDueOccurrences = async (today: Date = civilDateToday()): Promise<number> => {
-  const due = await prisma.recurringExpense.findMany({
-    where: { isActive: true, deletedAt: null, nextRunDate: { lte: today } },
-    include: { splits: true, currency: true },
-  });
+const generateForTemplate = async (recurring: DueTemplate, today: Date): Promise<number> => {
+  // Nothing past the end date is ever due, so cap the walk there.
+  const until =
+    recurring.endDate && recurring.endDate.getTime() < today.getTime() ? recurring.endDate : today;
+  const occurrenceDates = dueDates(
+    recurring.nextRunDate,
+    until,
+    recurring.frequency,
+    recurring.dayOfMonth ?? undefined,
+    MAX_OCCURRENCES_PER_TEMPLATE_PER_RUN,
+  );
 
-  let generated = 0;
-  for (const recurring of due) {
-    try {
-      const occurrenceDates = dueDates(
-        recurring.nextRunDate,
-        today,
-        recurring.frequency,
-        recurring.dayOfMonth ?? undefined,
-      ).filter((date) => !recurring.endDate || date.getTime() <= recurring.endDate.getTime());
-
-      let nextRunDate = recurring.nextRunDate;
-      let lastGeneratedDate: Date | null = recurring.lastGeneratedDate;
-
-      for (const occurrenceDate of occurrenceDates) {
-        const splits = computeSplits(
-          recurring.splitType,
-          recurring.defaultAmount.toFixed(recurring.currency.decimalPlaces),
-          recurring.splits.map((s) => ({
-            userId: s.userId,
-            amount: s.amount?.toString(),
-            percentage: s.percentage ? Number(s.percentage) : undefined,
-            shares: s.shares ?? undefined,
-          })),
-          recurring.currency.decimalPlaces,
-        );
-
-        try {
-          await prisma.$transaction(async (tx) => {
-            const expense = await tx.expense.create({
-              data: {
-                householdId: recurring.householdId,
-                categoryId: recurring.categoryId,
-                paidBy: recurring.paidBy,
-                recurringExpenseId: recurring.id,
-                description: recurring.description,
-                amount: recurring.defaultAmount,
-                currencyCode: recurring.currencyCode,
-                splitType: recurring.splitType,
-                expenseDate: occurrenceDate,
-                status: 'pending',
-                createdBy: recurring.createdBy,
-              },
-            });
-            await tx.expenseSplit.createMany({
-              data: splitsToRows(splits, recurring.currency.decimalPlaces).map((row) => ({
-                ...row,
-                expenseId: expense.id,
-              })),
-            });
-          });
-          generated += 1;
-          lastGeneratedDate = occurrenceDate;
-        } catch (error) {
-          if (!isUniqueConstraintViolation(error)) {
-            throw error;
-          }
-          // Already generated by an earlier run of this job — idempotent no-op.
-        }
-
-        nextRunDate = advanceDate(
-          occurrenceDate,
-          recurring.frequency,
-          recurring.dayOfMonth ?? undefined,
-        );
-      }
-
-      if (occurrenceDates.length > 0) {
-        await prisma.recurringExpense.update({
-          where: { id: recurring.id },
-          data: { nextRunDate, lastGeneratedDate },
-        });
-      }
-    } catch (error) {
-      logger.error(
-        { error, recurringExpenseId: recurring.id },
-        'failed to generate recurring expense occurrence',
-      );
-    }
+  const lastOccurrence = occurrenceDates[occurrenceDates.length - 1];
+  if (!lastOccurrence) {
+    // Due, yet no occurrence falls on or before the end date: the template
+    // is finished. Deactivating it stops it from being reloaded on every run.
+    await prisma.recurringExpense.update({
+      where: { id: recurring.id },
+      data: { isActive: false },
+    });
+    return 0;
   }
 
-  return generated;
+  const nextRunDate = advanceDate(
+    lastOccurrence,
+    recurring.frequency,
+    recurring.dayOfMonth ?? undefined,
+  );
+  const isFinished =
+    recurring.endDate !== null && nextRunDate.getTime() > recurring.endDate.getTime();
+
+  // The split is the same for every occurrence of a template.
+  const decimalPlaces = recurring.currency.decimalPlaces;
+  const splitRows = splitsToRows(
+    computeSplits(
+      recurring.splitType,
+      recurring.defaultAmount.toFixed(decimalPlaces),
+      recurring.splits.map((s) => ({
+        userId: s.userId,
+        amount: s.amount?.toString(),
+        percentage: s.percentage ? Number(s.percentage) : undefined,
+        shares: s.shares ?? undefined,
+      })),
+      decimalPlaces,
+    ),
+    decimalPlaces,
+  );
+
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.expense.createManyAndReturn({
+      data: occurrenceDates.map((expenseDate) => ({
+        householdId: recurring.householdId,
+        categoryId: recurring.categoryId,
+        paidBy: recurring.paidBy,
+        recurringExpenseId: recurring.id,
+        description: recurring.description,
+        amount: recurring.defaultAmount,
+        currencyCode: recurring.currencyCode,
+        splitType: recurring.splitType,
+        expenseDate,
+        status: 'pending' as const,
+        createdBy: recurring.createdBy,
+      })),
+      skipDuplicates: true,
+      select: { id: true, expenseDate: true },
+    });
+
+    if (created.length > 0) {
+      await tx.expenseSplit.createMany({
+        data: created.flatMap((expense) =>
+          splitRows.map((row) => ({ ...row, expenseId: expense.id })),
+        ),
+      });
+    }
+
+    const lastCreated = created.reduce<Date | null>(
+      (latest, expense) =>
+        latest === null || expense.expenseDate.getTime() > latest.getTime()
+          ? expense.expenseDate
+          : latest,
+      null,
+    );
+    // Guarded on the schedule we read: if an overlapping run already advanced
+    // this template, its write wins and ours must not restore stale values.
+    await tx.recurringExpense.updateMany({
+      where: { id: recurring.id, nextRunDate: recurring.nextRunDate },
+      data: {
+        nextRunDate,
+        lastGeneratedDate: lastCreated ?? recurring.lastGeneratedDate,
+        ...(isFinished ? { isActive: false } : {}),
+      },
+    });
+    return created.length;
+  });
+};
+
+/**
+ * Materializes every overdue occurrence, across every household, as a
+ * `pending` Expense (generate-recurring-occurrence.md). Safe to call any
+ * number of times: the (recurringExpenseId, expenseDate) unique constraint
+ * makes a repeat insert a no-op instead of a duplicate, and one template's
+ * failure is logged and skipped rather than aborting the batch.
+ *
+ * Templates are read in id-ordered batches so memory stays flat however many
+ * are due; a failing template cannot starve the rest because the cursor
+ * always moves forward.
+ *
+ * `now` is an instant, not a date: each household's "today" is the civil
+ * date its time zone shows at `now`.
+ *
+ * Returns the number of occurrences actually created.
+ */
+export const generateDueOccurrences = async (now: Date = new Date()): Promise<number> => {
+  let generated = 0;
+  let afterId: string | undefined;
+  // "Today" is the household's civil date, so it differs per zone. The query
+  // only prefilters with the latest date on Earth; each template is then
+  // judged against its own household's date.
+  const latestToday = latestCivilDateAnywhere(now);
+  const todayByZone = new Map<string, Date>();
+  const todayIn = (timeZone: string): Date => {
+    let today = todayByZone.get(timeZone);
+    if (!today) {
+      today = householdToday(timeZone, now);
+      todayByZone.set(timeZone, today);
+    }
+    return today;
+  };
+
+  for (;;) {
+    const batch = await prisma.recurringExpense.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        nextRunDate: { lte: latestToday },
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: 'asc' },
+      take: TEMPLATE_BATCH_SIZE,
+      select: DUE_TEMPLATE_SELECT,
+    });
+
+    for (const recurring of batch) {
+      const today = todayIn(recurring.household.timezone);
+      if (recurring.nextRunDate.getTime() > today.getTime()) {
+        continue; // not due yet where this household lives
+      }
+      try {
+        generated += await generateForTemplate(recurring, today);
+      } catch (error) {
+        logger.error(
+          {
+            err: error,
+            recurringExpenseId: recurring.id,
+            nextRunDate: isoDay(recurring.nextRunDate),
+          },
+          'failed to generate recurring expense occurrence',
+        );
+      }
+    }
+
+    const last = batch[batch.length - 1];
+    if (!last || batch.length < TEMPLATE_BATCH_SIZE) {
+      return generated;
+    }
+    afterId = last.id;
+  }
 };

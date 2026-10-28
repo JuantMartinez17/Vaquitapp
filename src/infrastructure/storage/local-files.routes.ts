@@ -32,8 +32,13 @@ localFilesRouter.get(
     try {
       const buffer = await readLocalFile(key);
       res.send(buffer);
-    } catch {
-      throw new NotFoundError('File not found');
+    } catch (err) {
+      // Only a missing file is a 404; anything else (permissions, I/O) is a
+      // real server problem that must not be disguised as "not found".
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new NotFoundError('File not found');
+      }
+      throw err;
     }
   }),
 );

@@ -88,9 +88,9 @@ export default tseslint.config(
   },
 
   // ── Bootstrap and CLI: console is the only logger available ───────────────
-  // config.ts fails before pino is configured; server.ts logs start/stop.
+  // config.ts fails before the logger can be built from a valid env.
   {
-    files: ['src/server.ts', 'src/app/config.ts'],
+    files: ['src/app/config.ts'],
     rules: { 'no-console': 'off' },
   },
 

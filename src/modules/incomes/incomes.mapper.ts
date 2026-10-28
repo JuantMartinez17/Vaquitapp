@@ -1,10 +1,12 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { formatMoney } from '../../domain/money/money.js';
 
+// Narrow `select`s on purpose: a bare `true` would load whole User rows
+// (password hash included) just to read a display name.
 export const INCOME_INCLUDE = {
-  receiver: true,
-  category: true,
-  currency: true,
+  receiver: { select: { id: true, displayName: true } },
+  category: { select: { id: true, name: true } },
+  currency: { select: { decimalPlaces: true } },
 } satisfies Prisma.IncomeInclude;
 
 export type IncomeWithRelations = Prisma.IncomeGetPayload<{ include: typeof INCOME_INCLUDE }>;

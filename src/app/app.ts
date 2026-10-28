@@ -1,12 +1,18 @@
-import { randomUUID } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { env } from './config.js';
-import { prisma } from '../infrastructure/database/prisma.js';
 import { logger } from '../infrastructure/logging/logger.js';
+import {
+  isHealthCheck,
+  resolveRequestId,
+  serializeRequest,
+  serializeResponse,
+} from '../infrastructure/logging/request-logging.js';
+import { createHealthRouter } from '../infrastructure/health/health.routes.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { apiRateLimiter } from './middleware/rate-limit.middleware.js';
 import { authRouter } from '../modules/auth/auth.routes.js';
 import { usersRouter } from '../modules/users/users.routes.js';
 import { householdsRouter } from '../modules/households/households.routes.js';
@@ -38,37 +44,34 @@ export const app = express();
 // lump all clients into one bucket instead of limiting per real client.
 app.set('trust proxy', 1);
 
-// Global middlewares
-app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGINS.split(',') }));
-app.use(express.json({ limit: '1mb' }));
+// Global middlewares.
+// Request logging goes first so that requests rejected further down (body
+// parser errors, CORS) still carry a request id and a log line.
 app.use(
   pinoHttp({
     logger,
-    // Request ID: reuse the incoming X-Request-Id or generate one, and
-    // return it in the response so logs and reports can be correlated.
-    genReqId: (req, res) => {
-      const incoming = req.headers['x-request-id'];
-      const id = (Array.isArray(incoming) ? incoming[0] : incoming) ?? randomUUID();
-      res.setHeader('X-Request-Id', id);
-      return id;
-    },
+    genReqId: (req, res) => resolveRequestId(req, res),
+    serializers: { req: serializeRequest, res: serializeResponse },
+    autoLogging: { ignore: isHealthCheck },
   }),
 );
+app.use(helmet());
+// Browsers hide every response header outside the CORS safelist from scripts.
+// These are the ones a client acts on: back-off hints, the replay marker, the
+// id to quote in a bug report and the rate-limit budget.
+const EXPOSED_HEADERS = [
+  'Retry-After',
+  'Idempotency-Replayed',
+  'X-Request-Id',
+  'RateLimit-Limit',
+  'RateLimit-Remaining',
+  'RateLimit-Reset',
+  'RateLimit-Policy',
+];
+app.use(cors({ origin: env.CORS_ORIGINS, exposedHeaders: EXPOSED_HEADERS }));
+app.use(express.json({ limit: '1mb' }));
 
-// Health checks
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-app.get('/health/ready', async (_req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ status: 'ready', database: 'connected' });
-  } catch {
-    res.status(503).json({ status: 'not ready', database: 'disconnected' });
-  }
-});
+app.use(createHealthRouter());
 
 // API documentation, generated from the same Zod schemas that validate
 // requests (F10). Not versioned like /api/v1: it describes the whole API.
@@ -76,6 +79,7 @@ app.use('/docs', openApiRouter);
 
 // API v1 routes
 const apiRouter = express.Router();
+apiRouter.use(apiRateLimiter);
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
 apiRouter.use('/households', householdsRouter);
