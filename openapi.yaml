@@ -8641,16 +8641,16 @@ paths:
           description: First day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: to
           in: query
           required: true
           description: Last day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
       responses:
         '200':
           description: Summary for the range
@@ -8771,16 +8771,16 @@ paths:
           description: First day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: to
           in: query
           required: true
           description: Last day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
       responses:
         '200':
           description: Spend broken down by category
@@ -8901,16 +8901,16 @@ paths:
           description: First day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: to
           in: query
           required: true
           description: Last day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
       responses:
         '200':
           description: Spend broken down by member
@@ -9031,16 +9031,16 @@ paths:
           description: First day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: to
           in: query
           required: true
           description: Last day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: granularity
           in: query
           required: false
@@ -9172,16 +9172,16 @@ paths:
           description: First day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
         - name: to
           in: query
           required: true
           description: Last day of the range, inclusive (YYYY-MM-DD).
           schema:
             type: string
-            pattern: ^\d{4}-\d{2}-\d{2}$
             format: date
+            pattern: ^\d{4}-\d{2}-\d{2}$
       responses:
         '200':
           description: Current vs. previous period

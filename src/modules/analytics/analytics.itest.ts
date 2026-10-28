@@ -25,6 +25,18 @@ describe('analytics', () => {
       .expect(401);
   });
 
+  it('rejects a date that is not on the calendar instead of rolling it over', async () => {
+    const admin = await registerTestUser(app);
+    const householdId = await createTestHousehold(app, admin);
+
+    for (const range of ['from=2026-02-31&to=2026-03-31', 'from=2026-02-01&to=2026-02-30']) {
+      const res = await authed(admin.accessToken)(
+        request(app).get(`/api/v1/households/${householdId}/analytics/summary?${range}`),
+      ).expect(422);
+      assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+    }
+  });
+
   it('rejects a missing or inverted date range', async () => {
     const admin = await registerTestUser(app);
     const householdId = await createTestHousehold(app, admin);
