@@ -76,6 +76,8 @@ Los sondeos de `/health` y `/health/ready` no se loguean (ahogarían el tráfico
 | `npm run test:unit`                    | Dominio puro, sin base (`*.test.ts`)     |
 | `npm run test:integration`             | Contra Postgres (`*.itest.ts`)           |
 | `npm run test:watch` / `test:coverage` | Tests con el runner nativo (`node:test`) |
+| `npm run openapi:export`               | Regenera `openapi.yaml` desde el código  |
+| `npm run openapi:check`                | Falla si `openapi.yaml` está desfasado   |
 | `npm run prisma:generate`              | Genera el cliente de Prisma              |
 | `npm run prisma:migrate`               | Crea/aplica migraciones (dev)            |
 | `npm run prisma:studio`                | GUI de la base                           |
@@ -140,6 +142,7 @@ src/
 │   ├── money/              # Decimal, redondeo por moneda, formato
 │   ├── splitting/          # allocate (mayor resto) + las 4 estrategias
 │   ├── balances/           # (actividad) → balances + simplificación de deudas
+│   ├── calendar/           # fecha civil de hoy en una zona IANA (Intl, sin dependencias)
 │   ├── recurrence/         # cálculo de próximas ocurrencias
 │   └── files/              # sniffing de MIME por magic bytes
 ├── infrastructure/
@@ -447,9 +450,10 @@ contra un Postgres desechable— en cada PR a las tres ramas.
 - Mensajes de commit en formato **Conventional Commits** (`feat:`, `fix:`, `chore:`…).
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) corre en cada push/PR a esas tres
-ramas: `install → format:check → lint → typecheck → migrate deploy → seed → test → build`, contra un
-Postgres desechable (servicio de GitHub Actions). Además verifica que `openapi.yaml` no esté
-desactualizado respecto del código (ver [OpenAPI](#openapi)).
+ramas: `install → prisma generate → format:check → lint → typecheck → openapi:check → migrate deploy
+→ seed → test → build`, con la base en un Postgres desechable (servicio de GitHub Actions).
+`openapi:check` verifica que `openapi.yaml` no esté desactualizado respecto del código (ver
+[OpenAPI](#openapi)).
 
 ## Deploy
 
@@ -551,8 +555,9 @@ detrás del pgbouncer de Neon:
 
 La spec vive versionada en [`openapi.yaml`](openapi.yaml) en la raíz y se **genera desde el
 código** (`npm run openapi:export`), no se edita a mano. El CI falla si quedó desactualizada
-(`npm run openapi:check`), y un contract test valida las respuestas reales contra sus
-schemas. Swagger UI en `/docs` y el JSON crudo en `/docs/openapi.json`.
+(`npm run openapi:check`). Además hay dos tests de integración: un **contract test** valida las
+respuestas reales contra sus schemas y un **drift test** compara las rutas montadas en Express con
+las de la spec. Swagger UI en `/docs` y el JSON crudo en `/docs/openapi.json`.
 
 ## Estado
 
@@ -583,8 +588,11 @@ Pendientes conocidos, con su ticket implícito:
 - **Sin envío de emails**: la invitación devuelve el `token` y el link se comparte a mano.
   Tampoco hay verificación de email ni recuperación de contraseña.
 - **Sin multi-moneda real**: la tabla `exchange_rates` existe pero no se usa.
-- **Zona horaria del hogar**: `households.timezone` se guarda pero todavía no se usa; el job de
-  gastos recurrentes calcula "hoy" en UTC.
+- **Zona horaria del hogar**: `households.timezone` (por defecto `America/Argentina/Buenos_Aires`)
+  ya define el "hoy" de la generación de gastos recurrentes y del `overdue` de `/upcoming`.
+  Todavía no hay endpoint para cambiarla: se crea con el valor por defecto. Un valor que el
+  runtime no reconozca cae a UTC (con un warning en el log). Fuera de eso no se usa: los rangos
+  de analytics son fechas explícitas que manda el cliente.
 - Los rate limiters usan un **store en memoria**: sirven mientras la app corra en una sola
   instancia. Escalar horizontalmente requiere un store compartido (y el scheduler, un solo
   responsable).
